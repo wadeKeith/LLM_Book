@@ -1,0 +1,275 @@
+\documentclass[UTF8,zihao=-4,openany]{ctexbook}
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{geometry}
+\usepackage[hidelinks]{hyperref}
+\geometry{letterpaper,margin=1in}
+
+\hypersetup{
+  pdftitle={大语言模型：基础、系统、对齐与应用},
+  pdfauthor={Wade Keith},
+  pdfsubject={大语言模型},
+  pdfkeywords={大语言模型, Transformer, 对齐, 检索增强生成, 推理, 多模态, 评测}
+}
+
+\newcommand{\llm}{大语言模型}
+\newcommand{\llms}{大语言模型}
+\newcommand{\Transformer}{Transformer}
+\newcommand{\rlhf}{RLHF}
+\newcommand{\rag}{RAG}
+
+\title{大语言模型\\\large 基础、系统、对齐与应用}
+\author{Wade Keith}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\frontmatter
+
+\chapter*{前言}
+本书是英文版《Large Language Models: Foundations, Systems, Alignment, and Applications》的中文版本。中文稿不是逐句直译，而是以相同的知识结构重新组织为中文教材文本：从数据、分词、模型结构、预训练和训练系统开始，进一步讨论推理服务、指令微调、参数高效适配、领域适配、检索增强、工具使用、偏好学习、推理型模型、多模态模型、评测、安全和治理。
+
+本书坚持一个基本立场：\llm 不是一个孤立算法，而是一套由数据、目标函数、模型结构、系统实现、推理策略、评测协议和治理约束共同定义的工程系统。理解 \llm 的关键不是记住模型家族名称，而是能说清楚一个选择优化了什么、牺牲了什么、如何测量，以及测量本身可能在哪里失真。
+
+本书文字、结构、例子和论证为原创教材性写作。书中研究判断尽量连接到公开论文、技术报告或课程材料。第三方幻灯片、视频转写、数据样本、代码清单和图像不作为正文内容复制。
+
+\chapter*{伦理与来源说明}
+本书只复述公开研究中的概念、方法和结论，不复制第三方课程材料、私有数据、模型输出、代码或图像。涉及模型报告、数据集、软件项目、法规和政策文件时，均把它们作为参考来源，而不是作为可直接搬运的内容。
+
+读者在复现实验时应特别关注数据来源、许可证、个人信息、评测污染和安全边界。一个可以训练的系统不等于一个可以发布的系统；一个可以发布的系统也不等于一个可以在高风险场景中不受约束使用的系统。
+
+\tableofcontents
+
+\mainmatter
+
+\part{基础}
+
+\chapter{什么使语言模型变大}
+\section{研究对象}
+\llm 的基本对象仍然是条件概率分布。给定 token 序列 $x_1,\ldots,x_T$，自回归模型把联合概率分解为
+\[
+p_\theta(x_1,\ldots,x_T)=\prod_{t=1}^{T}p_\theta(x_t\mid x_{<t}).
+\]
+训练通常最小化下一个 token 的交叉熵。这个目标看起来简单，却把语言、代码、数学、工具调用、对话格式和多模态描述都压缩进同一个预测界面。
+
+“大”不只表示参数多。参数规模、训练 token 数、数据多样性、上下文长度、推理预算、工具能力、服务吞吐和安全约束都会改变模型行为。一个参数更小但上下文更长、检索更强、推理预算更大的系统，可能在真实任务中比一个参数更多但系统设计较弱的模型更有用。
+
+\section{从基础模型到助手}
+基础模型通过预训练学习广泛的语言和知识模式，但它并不天然知道应该如何作为用户助手响应。后训练阶段通过监督指令微调、偏好学习、安全数据和工具协议，把基础模型转化为面向用户的系统。InstructGPT 和后续 RLHF 工作使这一点变得清晰：可用性不是预训练困惑度的直接结果，而是接口、偏好和安全目标共同塑造的结果 \cite{ouyang2022training,bai2022training}。
+
+近年来，OpenAI o1/o3、DeepSeek-R1、Qwen3 和 Kimi K2 等系统又把“推理时间”变成产品能力的一部分。推理不再只是模型内部能力，也包括采样、搜索、验证、工具调用和预算分配 \cite{deepseek2025r1,yang2025qwen3,kimi2025k2}。
+
+\section{本书路线}
+第一部分讨论建模对象、token 和数据。第二部分讨论 \Transformer、GPT、LLaMA 类结构、优化、分布式训练和推理服务。第三部分讨论 SFT、LoRA、QLoRA、领域和语言适配。第四部分讨论 \rag、工具、agent、偏好学习、推理型训练、多模态、评测、安全和治理。最后一章把 CS336 式从零实现纪律与 2025--2026 年前沿研究连接起来 \cite{stanfordcs3362026}。
+
+\chapter{Token、语料与训练信号}
+\section{数据就是规格}
+数据不是模型之外的附件。它定义了模型可见的语言、知识、风格、许可证边界和风险。训练语料中的重复内容会增加记忆风险；低质量网页会教会模型无意义模板；代码数据会改变推理和格式能力；多语言数据会影响 token 效率和跨语言泛化。
+
+一个严肃的数据报告至少应记录来源、时间、许可证、语言分布、过滤规则、去重方法、敏感信息处理、合成数据生成器、评测集重叠检查和数据混合权重。没有这些信息，模型行为很难解释，评测结论也很难复现。
+
+\section{分词是建模选择}
+Tokenizer 把文本转成离散 token。BPE、SentencePiece 和 byte fallback 等方案不只是预处理工具，它们改变序列长度、词表大小、嵌入矩阵形状和模型可学习的单位 \cite{sennrich2016neural,kudo2018sentencepiece}. 对中文、代码、数学符号和低资源语言而言，token fertility 尤其重要：同样一句话被切成更多 token，会占用更多上下文和训练计算。
+
+Tokenizer 与模型权重绑定。更换 tokenizer 会改变 token id、特殊 token、聊天模板和长度分布。生产系统应把 tokenizer、chat template、special tokens 和模型权重一起版本化。
+
+\section{预训练之外的信号}
+监督指令数据把结构化对话序列化为 token；偏好数据把一个 prompt 下的候选回答排序；验证器数据用单元测试、数学答案或工具执行结果给出奖励；检索语料在推理时提供外部证据。它们都不是简单文本，必须记录格式、掩码、边界和评测污染风险。
+
+评测污染是现代 \llm 研究的核心问题。模型可能见过原题、改写、答案解析、翻译版本或合成变体。任何高分都应回答一个问题：这个分数测量的是泛化能力，还是训练和开发流程已经接触过测试信息 \cite{xu2024benchmark}？
+
+\part{架构、优化与系统}
+
+\chapter{\Transformer 机制}
+\section{张量契约}
+\Transformer 的实现首先是张量契约。输入通常具有形状 $B\times T$，经过嵌入层变成 $B\times T\times d$。注意力层、前馈层、残差连接和归一化层都必须保持形状一致。许多训练错误不是数学思想错误，而是 mask、padding、batch 维度或 dtype 处理错误。
+
+\section{缩放点积注意力}
+对查询 $Q$、键 $K$、值 $V$，注意力计算为
+\[
+\mathrm{Attention}(Q,K,V)=\mathrm{softmax}\left(\frac{QK^\top}{\sqrt{d_k}}+M\right)V.
+\]
+mask $M$ 决定 token 能看见什么。因果语言模型使用上三角 mask，保证第 $t$ 个位置不能看到未来 token。这个 mask 是自回归训练和生成的根本约束。
+
+\section{残差、归一化与前馈层}
+现代 decoder 通常使用 pre-norm 结构，把归一化放在子层之前，以改善深层训练稳定性。前馈层对每个 token 独立作用，提供非线性容量。SwiGLU 等门控前馈结构在 LLaMA 类模型中很常见 \cite{shazeer2020glu}。
+
+\chapter{从 \Transformer 到 GPT}
+\section{Decoder-only 契约}
+GPT 类模型去掉 encoder-decoder 结构，只保留因果 decoder。它的统一接口是：给定前文，预测下一个 token。问答、翻译、代码补全、函数调用和对话都可以被写成同一个序列建模问题。
+
+\section{训练循环}
+一个最小 GPT 训练循环包括：取样 token block，前向计算 logits，右移标签，计算交叉熵，反向传播，梯度裁剪，优化器更新，周期性验证和 checkpoint。损失曲线应按数据源、长度和任务切片观察，而不是只看全局平均。
+
+\section{从 logits 到文本}
+生成时，模型把 logits 转成分布。温度控制分布尖锐程度；top-$k$ 和 top-$p$ 控制候选集合；重复惩罚影响循环文本；stop token 和 chat template 控制响应边界。解码策略不是无关细节，它直接影响事实性、创造性、长度、成本和安全过滤。
+
+\chapter{LLaMA 类架构}
+\section{现代 decoder 默认配置}
+LLaMA 类模型通常使用 pre-norm、RMSNorm、RoPE、SwiGLU、无 bias 线性层、grouped-query attention、长上下文和更复杂的数据混合 \cite{touvron2023llama,touvron2023llama2,dubey2024llama3}. 这些选择的价值不是单独存在的，而是在训练稳定性、推理成本和后训练兼容性之间形成组合。
+
+\section{KV Cache 与注意力变体}
+推理时，已生成 token 的 key/value 可以缓存，避免每步重复计算全部前缀。KV cache 大小随层数、头数、维度、上下文长度和 batch 增长。GQA/MQA 通过共享 key/value 头减少缓存成本，但可能改变质量和长上下文行为 \cite{ainslie2023gqa}。
+
+\section{MoE 与替代序列模型}
+MoE 通过稀疏激活增加总容量，每个 token 只选择部分专家。它改变了“模型大小”的含义：必须区分总参数、激活参数、路由成本和专家通信。DeepSeek-V3 与 Kimi K2 显示了 MoE 在开放权重前沿系统中的重要性 \cite{deepseek2024v3,kimi2025k2}。
+
+RetNet、Mamba、Mamba-2 和 Titans 等工作探索了注意力之外的长序列机制 \cite{sun2023retnet,gu2023mamba,dao2024mamba2,behrouz2025titans}. 但替代注意力的主张必须在相同数据、tokenizer、训练预算、上下文任务和服务负载下验证。
+
+\chapter{优化与预训练}
+\section{预训练问题}
+预训练配方是架构、token 预算、数据混合、优化器、精度、batch、上下文长度、硬件拓扑和停止规则的耦合选择。Scaling laws 显示损失随参数、数据和计算可预测变化；Chinchilla 进一步说明许多早期大模型相对数据量而言参数过多 \cite{kaplan2020scaling,hoffmann2022training}。
+
+\section{AdamW、学习率与稳定性}
+AdamW 将权重衰减与自适应梯度更新解耦，是现代 \llm 训练的常见优化器 \cite{loshchilov2019decoupled}. Warmup 防止早期更新过大；cosine decay 或类似 schedule 控制后期收敛；梯度裁剪和混合精度处理数值稳定性。BF16 常用于大模型训练，因为指数范围比 FP16 更稳。
+
+\section{可复现训练记录}
+训练报告应记录随机种子、数据 manifest、tokenizer、模型配置、optimizer state、精度、并行策略、checkpoint 频率、验证集、损失切片、硬件和软件版本。没有这些记录，一个损失曲线只能说明“某次运行发生过”，不能支持科学解释。
+
+\chapter{分布式训练系统}
+\section{内存与并行}
+训练内存由参数、梯度、优化器状态、激活、临时 buffer 和通信 buffer 组成。数据并行复制模型并同步梯度；ZeRO/FSDP 切分参数、梯度和优化器状态 \cite{rajbhandari2020zero,zhao2023pytorchfsdp}; tensor parallelism 切分层内矩阵；pipeline parallelism 切分深度；expert parallelism 处理 MoE 专家路由。
+
+\section{通信与吞吐}
+大规模训练不是只买更多 GPU。互联带宽、all-reduce、all-to-all、pipeline bubble、activation checkpointing、kernel fusion 和数据加载都会限制吞吐。报告训练效率时，应同时给出 tokens/s、step time、MFU、GPU 利用率、显存峰值和失败恢复策略。
+
+\section{实现纪律}
+CS336 把资源核算、GPU、kernel、Triton、并行和 scaling laws 放在核心位置，是因为语言模型工程的很多结论只有在实现后才显现 \cite{stanfordcs3362026}. 一个研究者应能从 CPU 小模型调试开始，再逐步加入 GPU、混合精度、FlashAttention、checkpointing 和分布式训练。
+
+\chapter{推理与服务}
+\section{Prefill 与 Decode}
+推理服务不是“关闭 dropout 后跑模型”。Prefill 处理 prompt，代价随输入长度增长；decode 逐 token 生成，代价随输出长度和 batch 调度变化。真实服务必须处理流式输出、取消、超时、缓存、租户隔离和安全过滤。
+
+\section{KV Cache、批处理与调度}
+KV cache 是长上下文推理的主要内存压力。PagedAttention 等方法把 cache 管理变成类似操作系统内存分页的问题 \cite{kwon2023efficient}. 服务系统需要在吞吐、首 token 延迟、尾延迟和公平性之间平衡。
+
+\section{下一代推理系统}
+随着 MoE、长上下文和 disaggregated serving 发展，推理服务开始分离 prefill/decode、attention/FFN 或专家路由。Frontier simulator 这类工作说明，下一代服务系统必须能模拟专家并行、跨集群路由和异构资源 \cite{feng2025frontier}。
+
+\part{适配}
+
+\chapter{监督指令微调}
+\section{接口转换}
+SFT 把基础模型变成遵循指令的模型。一个样本包含系统消息、用户消息、上下文、工具观察和目标回答。训练时通常只对 assistant token 计算损失，prompt token 作为条件而非标签。
+
+\section{合成数据}
+Self-Instruct、WizardLM、Orca 和 STaR 显示了合成指令、复杂任务演化、教师解释蒸馏和自举推理数据的价值 \cite{wang2022selfinstruct,xu2023wizardlm,mukherjee2023orca,zelikman2022star}. 合成数据管线必须记录生成器、prompt、采样参数、过滤规则、拒绝原因和评测重叠。
+
+\section{局限}
+SFT 学会的是示范分布。它可能提升格式和礼貌，却不一定提升真实偏好、事实性或安全性。评估 SFT 不能只看指令榜单，也要看基础能力回归、拒答边界、长上下文、多语言和代码能力。
+
+\chapter{参数高效适配}
+\section{Adapter、Prompt 与 LoRA}
+PEFT 的目标是减少训练参数、显存和 checkpoint 体积。Adapter 在层内加入小模块；prefix/prompt tuning 学习连续提示；LoRA 把权重更新写成低秩矩阵乘积 $\Delta W=BA$ \cite{hu2021lora}. 它适合多任务共享基础模型，但不免除数据和评测责任。
+
+\section{QLoRA 与量化训练}
+QLoRA 把基础模型量化为低精度并训练 LoRA adapter，从而显著降低显存需求 \cite{dettmers2023qlora}. 量化带来效率，也带来数值误差、目标模块选择和部署合并问题。报告 PEFT 结果时，应同时给出任务指标、回归指标、显存、训练时间、checkpoint 大小和服务延迟。
+
+\chapter{领域与语言适配}
+\section{适配是一种诊断}
+模型在新领域失败，可能因为 tokenizer 对语言切分差，预训练缺少事实，风格不匹配，输出结构不稳定，或答案必须基于私有知识。不同诊断对应不同方案：继续预训练、SFT、LoRA、RAG、工具调用或拒答策略。
+
+\section{继续预训练与检索}
+继续预训练适合稳定公开知识和领域语言模式；RAG 适合变化快、私有或需要可追溯证据的知识 \cite{gururangan2020dont,lewis2020retrieval}. 把私有知识写入权重可能带来隐私和更新成本；只做检索又可能受限于召回、chunking 和权限控制。
+
+\section{领域评测}
+领域评测应按实体、时间、语言、来源、任务类型和风险等级切片。医疗、法律、金融等高风险场景还需要专家审查、拒答质量、证据可追溯和上线监控。
+
+\part{对齐、应用与评测}
+
+\chapter{检索、工具与 Agent}
+\section{\rag 作为控制系统}
+\rag 把检索器、reranker、上下文构造器和生成器连接起来。核心指标不是“回答看起来对”，而是检索 recall、上下文 precision、答案正确性、引用忠实度、拒答行为和延迟成本 \cite{karpukhin2020dense,lewis2020retrieval,gan2025rag}。
+
+\section{工具使用}
+Toolformer、ReAct 和 WebGPT 等工作展示了模型调用工具、观察结果并继续推理的模式 \cite{schick2023toolformer,yao2023react,nakano2021webgpt}. 工具系统必须管理权限、参数验证、超时、重试、日志、状态和安全边界。
+
+\section{Agent 工作流}
+Agent 不是一个魔法能力，而是循环：选择动作、执行工具、观察结果、更新状态。Kimi K2 等模型报告把 agentic coding、长上下文和工具使用作为核心能力 \cite{kimi2025k2}. 评测 agent 时，应报告成功率、工具调用次数、成本、延迟、失败模式和权限违规。
+
+\chapter{偏好学习与对齐}
+\section{偏好数据}
+偏好学习把单一目标回答改成候选回答比较。一个 prompt 下的 chosen/rejected 对只表达某个标注规范、标注人群和采样分布下的偏好，不是普遍真理。Reward model 学到的是这种局部偏好函数。
+
+\section{RLHF、PPO 与 DPO}
+RLHF 先训练 reward model，再用带 KL 约束的策略优化改善回答 \cite{ziegler2019finetuning,stiennon2020learning,ouyang2022training}. PPO 是常见算法；DPO 则把偏好优化转化为更直接的监督式目标 \cite{schulman2017proximal,rafailov2023direct}. 二者都可能出现过优化、奖励黑客、长度偏差和分布漂移。
+
+\section{安全与 AI Feedback}
+Constitutional AI 和 RLAIF 用规则或 AI 反馈减少人工标注负担 \cite{bai2022constitutional,lee2023rlaif}. 但安全不是简单增加拒答数据。系统必须区分有害请求、合法敏感请求、误拒和越权工具行为。
+
+\chapter{推理与测试时计算}
+\section{推理是预算化计算}
+Chain-of-thought、自一致性、分解、程序化推理、树搜索和验证器都可以被看作测试时计算分配策略 \cite{wei2022chain,wang2022self,yao2023tree}. 重要问题是：生成多少候选、用什么评分、花多少 token、何时调用工具、何时停止。
+
+\section{RLVR 与 GRPO}
+DeepSeek-R1 表明，基于可验证任务的大规模强化学习可以激发反思、验证和动态策略等推理行为 \cite{deepseek2025r1}. GRPO 用组内相对优势替代 learned critic，降低内存和复杂度，但依赖样本组多样性和奖励可靠性。RLVR 的关键风险是奖励捷径：模型可能学会通过格式或漏洞满足验证器，而不是真正稳健推理。
+
+\section{自适应测试时计算}
+测试时扩展研究正在从“多花 token 是否更强”转向“如何按难度分配预算”。综述把 test-time scaling 分解为 scale 什么、如何 scale、在哪里 scale、如何评估 \cite{zhang2025testtimescaling}; 预算化推理进一步区分固定预算控制和按置信度/难度自适应分配 \cite{alomrani2025budget}。
+
+\chapter{多模态 \llm}
+\section{模态作为接口}
+多模态模型把图像、视频、音频、文档和语音接入语言模型。CLIP 通过图文对比学习建立联合表示 \cite{radford2021learning}; Flamingo、BLIP-2、LLaVA 等系统展示了冻结视觉编码器、投影层、query transformer 和跨注意力等连接方式 \cite{alayrac2022flamingo,li2023blip2,liu2023visual}。
+
+\section{视频、音频与 Omni 模型}
+视频引入时间维度，音频引入采样、说话人、韵律和流式延迟。Qwen3-VL 报告了长上下文多模态输入、视频时间对齐和视觉推理能力 \cite{qwen2025qwen3vl}. Qwen3-Omni 进一步把文本、图像、音频、视频理解和语音生成放进统一系统，并强调低延迟流式输出 \cite{qwen2025qwen3omni}。
+
+\section{多模态评测与安全}
+多模态评测应区分感知错误和推理错误。MMMU、MathVista、POPE、HallusionBench 和 MM-SafetyBench 分别覆盖专家知识、视觉数学、幻觉和安全风险 \cite{yue2023mmmu,lu2023mathvista,li2023pope,guan2023hallusionbench,liu2023mmsafetybench}. 视觉 prompt injection、截图隐私、OCR 错误和敏感属性推断都需要单独测试。
+
+\chapter{评测、安全与治理}
+\section{评测是测量系统}
+评测从问题开始：要支持什么决策？客服助手、代码 agent、医疗信息助手和教育系统需要不同指标。MMLU、HELM、GPQA、SWE-bench、HLE 和 BrowseComp 提供公共参照，但每个 benchmark 都有构念边界 \cite{hendrycks2020measuring,liang2022holistic,rein2023gpqa,jimenez2023swebench,phan2025humanity,openai2025browsecomp}。
+
+\section{人类评测与 LLM-as-Judge}
+人类评测需要明确 rubric、标注人资格、一致性、置信区间和失败样例。LLM-as-Judge 可以扩大规模，但会继承 judge 模型偏差、位置偏差、长度偏差和脆弱性 \cite{zheng2023judging,liu2023geval}. 高风险发布不能只依赖模型裁判。
+
+\section{治理}
+治理包括模型卡、数据卡、系统卡、风险框架、红队、监控、事件响应和回滚。NIST AI RMF、NIST GenAI Profile、EU AI Act、OpenAI Preparedness Framework 和 Anthropic Responsible Scaling Policy 都说明：前沿模型发布需要把能力、风险、缓解措施和残余不确定性写成可审计文档 \cite{nist2023airmf,nist2024genai,europeanunion2024aiact,openai2025preparedness,anthropic2026rspv3}。
+
+\chapter{研究前沿与实践路线}
+\section{为什么还需要前沿章}
+前面各章覆盖了 \llm 生命周期，但前沿变化太快，不能只靠固定目录。最新系统常常在章节之间产生创新：架构变化依赖数据和训练稳定性；推理模型依赖奖励、采样和验证；多模态模型依赖服务延迟和安全策略；agent 能力依赖工具协议和评测环境。
+
+CS336 的价值在于强调从零实现：tokenizer、模型、优化器、GPU kernel、并行、scaling laws、数据处理、评测和 alignment/reasoning RL 都要亲自构建或测量 \cite{stanfordcs3362026}. 这也是本书中文版本建议的学习方式。
+
+\section{当前仍需持续补强的方向}
+第一，实验作业应继续增加。读者应写 tokenizer、小 GPT、SFT collator、LoRA adapter、RAG evaluator、reward model 和 verifier loop，并报告准确率、显存、tokens/s、延迟和失败样例。
+
+第二，服务系统应继续跟进 MoE 和 disaggregated inference。下一代推理不只是 batch scheduler，而是涉及 prefill/decode 分离、专家路由、跨集群通信和异构资源 \cite{feng2025frontier}.
+
+第三，推理章节要持续跟踪 RLVR、GRPO、预算控制和 agentic tool use。RL for LLMs 的综述已经把 PPO、DPO、GRPO、RLHF、RLAIF 和 RLVR 放进同一设计空间 \cite{srivastava2025rlsurvey}.
+
+第四，多模态章节要持续跟踪视频、音频、实时语音和长上下文文档理解。Qwen3-VL 和 Qwen3-Omni 表明，多模态正从“图像加文本”走向统一交互系统 \cite{qwen2025qwen3vl,qwen2025qwen3omni}.
+
+\section{读者路线图}
+建议路线是：先实现最小 tokenizer 和 GPT；再加入资源核算和小规模训练；然后做数据清洗、去重和污染检查；接着做 SFT、LoRA、RAG；再做 DPO、GRPO 或 verifier-guided RL；最后实现一个带 KV cache、流式输出、延迟统计和安全过滤的服务。每一步都问同一个问题：目标函数是什么，数据来自哪里，系统成本是多少，评测是否可信。
+
+\appendix
+
+\chapter{附录：记号、实验记录与术语}
+\section{常用记号}
+$B$ 表示 batch size，$T$ 表示序列长度，$d$ 表示隐藏维度，$V$ 表示词表大小，$\theta$ 表示模型参数，$\pi_\theta$ 表示策略模型，$p_\theta$ 表示语言模型分布。
+
+\section{实验记录清单}
+每次实验应记录：代码版本、数据版本、tokenizer、模型配置、随机种子、优化器、学习率、batch、精度、硬件、训练时间、checkpoint、验证集、指标、失败样例和结论。
+
+\section{术语表}
+\begin{description}
+\item[基础模型] 经过预训练但尚未进行指令微调或偏好优化的模型。
+\item[后训练] 在预训练之后进行的 SFT、偏好优化、安全调优和领域适配。
+\item[KV Cache] 推理时缓存历史 token 的 key/value 张量以降低增量生成成本。
+\item[MoE] Mixture-of-Experts，每个 token 只激活部分专家的稀疏模型结构。
+\item[\rag] Retrieval-Augmented Generation，推理时检索外部证据并生成答案的系统。
+\item[RLVR] Reinforcement Learning with Verifiable Rewards，用可验证答案、代码测试或规则奖励训练模型。
+\item[评测污染] 训练或开发流程接触到测试题、答案、解析或变体，导致分数高估。
+\end{description}
+
+\backmatter
+\bibliographystyle{spmpsci}
+\bibliography{references}
+
+\end{document}

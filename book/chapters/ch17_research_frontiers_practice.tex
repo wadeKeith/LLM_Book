@@ -1,0 +1,95 @@
+\chapter{Research Frontiers and Practice Roadmap}
+\label{ch:research-frontiers-practice}
+
+\abstract{This chapter audits the coverage of the book against current language-model practice and connects the previous chapters to a concrete research and engineering roadmap. It emphasizes from-scratch implementation, data pipelines, resource accounting, emerging frontier model designs, reasoning reinforcement learning, adaptive test-time compute, multimodal and agentic systems, and the open questions that remain after reading the book.}
+
+\section{Why the Book Needs a Frontier Chapter}
+\label{sec:why-frontier-chapter}
+
+The preceding chapters explain the main lifecycle of a large language model: data, tokenization, architecture, pretraining, distributed systems, inference, adaptation, retrieval, alignment, reasoning, multimodality, and evaluation. That lifecycle is stable enough to teach, but the frontier is not stable enough to freeze. The most important lesson from recent systems is that research progress often comes from changing the interface between chapters. A model report may describe an architectural change, but the observed gain may depend on the data mixture, optimizer, post-training recipe, evaluation harness, inference budget, and serving stack. A deployment result may look like an application result while actually being a systems result.
+
+For that reason, this final main chapter is written as an audit. It asks what the manuscript still needs if it is read as a serious guide to current practice. The answer is not another catalog of model names. The missing layer is the discipline that turns concepts into falsifiable experiments: implement the components yourself, account for compute and memory, measure data quality, run scaling experiments, report inference cost, and evaluate task behavior under realistic constraints. Stanford's CS336, \emph{Language Modeling from Scratch}, makes this discipline explicit by organizing the course around tokenization, PyTorch and resource accounting, architecture and hyperparameters, attention alternatives and mixture-of-experts, GPUs and kernels, parallelism, scaling laws, inference, evaluation, data processing, and alignment or reasoning RL \cite{stanfordcs3362026}. This book should be read in the same spirit: a chapter is incomplete until the reader can state the objective, implement the simplified system, and explain how the measurement could be wrong.
+
+\section{What Is Covered, and What Still Needs Attention}
+\label{sec:coverage-audit}
+
+The current manuscript covers the canonical decoder-only \transformer stack, LLaMA-class design, pretraining optimization, distributed training, inference serving, supervised instruction tuning, PEFT, domain adaptation, RAG, preference learning, reasoning, multimodality, and governance. It also includes provenance and contamination concerns, which are essential for publication. The remaining gaps are not fatal, but they define the next edition.
+
+First, the book should continue to deepen implementation assignments. A modern reader benefits from writing a tokenizer, a small GPT, a masked SFT collator, a LoRA adapter, a retrieval evaluator, and a tiny verifier loop. These exercises should report not only task accuracy but also memory, FLOPs, tokens per second, and failure examples. The point is not to reproduce frontier scale. It is to make the invariants visible before scale hides them.
+
+Second, the systems story should keep expanding toward disaggregated inference and sparse models. Chapter~\ref{ch:inference-serving} explains prefill, decode, KV cache, batching, quantization, and speculative decoding. Frontier serving increasingly adds mixture-of-experts routing, expert parallelism, prefill-decode disaggregation, cross-cluster routing, and heterogeneous resource allocation. The Frontier simulator paper is a useful example of how serving research is moving from dense co-located models to MoE and disaggregated designs \cite{feng2025frontier}. A practical systems chapter should ask how model architecture changes the scheduler, not only how the scheduler serves a fixed model.
+
+Third, the multimodal chapter should be kept current. Qwen3-VL reports 256K-token long-context comprehension across text and interleaved multimodal inputs, stronger video and visual reasoning, and explicit temporal alignment mechanisms \cite{qwen2025qwen3vl}. Qwen3-Omni pushes the interface further by unifying text, image, audio, and video understanding with speech generation and low-latency streaming considerations \cite{qwen2025qwen3omni}. The conceptual lesson is that multimodality is not just another encoder. It changes context construction, latency, privacy, evaluation, and product contracts.
+
+Fourth, the alignment and reasoning chapters should track the shift from preference imitation toward verifiable reinforcement learning and adaptive inference. DeepSeek-R1 showed that reasoning behavior can be incentivized through large-scale RL on verifiable tasks without relying entirely on human-written reasoning traces \cite{deepseek2025r1}. Qwen3 reports model families with reasoning and non-reasoning modes, multilingual breadth, and open release practices \cite{yang2025qwen3}. Kimi K2 frames open-weight progress around agentic coding, tool use, long context, sparse MoE, and post-training for agent behavior \cite{kimi2025k2}. Surveys of RL for LLMs now treat PPO, DPO, GRPO, RLHF, RLAIF, and RLVR as one broader design space rather than isolated recipes \cite{srivastava2025rlsurvey}.
+
+\section{From-Scratch Practice as a Research Method}
+\label{sec:from-scratch-practice}
+
+From-scratch practice is not nostalgia. It is a defense against cargo-cult model building. A reader who has implemented byte-pair encoding understands why token fertility affects multilingual performance. A reader who has written attention kernels, even in simplified form, understands why shape conventions and memory layout matter. A reader who has profiled a training step understands why global batch size, activation checkpointing, optimizer state, and communication overlap cannot be chosen independently.
+
+The minimal implementation path should look like this. Start with a tokenizer and record its behavior on English, code, math, and non-Latin scripts. Build a small decoder-only model and validate tensor shapes, mask semantics, residual connections, and initialization. Train on a small corpus and inspect loss by data source. Add sampling and observe how temperature, top-$p$, repetition penalties, and stop tokens change outputs. Add resource accounting: parameter count, activation memory, optimizer memory, FLOPs, arithmetic intensity, tokens per second, and wall-clock cost. Then add one systems optimization at a time: fused attention, mixed precision, gradient checkpointing, data parallelism, or tensor parallelism.
+
+Only after that path is clear should the reader study large model reports. The reports will become less mysterious. A claim about a larger vocabulary becomes a claim about token efficiency and embedding size. A claim about MoE becomes a claim about active parameters, router stability, expert load balance, communication, and serving cost. A claim about long context becomes a claim about positional generalization, KV memory, retrieval behavior, and latency. A claim about reasoning becomes a claim about reward design, exploration, verifier quality, inference tokens, and selection bias.
+
+\section{Frontier Architecture Questions}
+\label{sec:frontier-architecture-questions}
+
+The book's architecture chapters emphasize decoder-only \transformers because they remain the reference design for most deployed language models. The frontier, however, is exploring at least four pressure points.
+
+The first pressure point is sparse computation. MoE models can increase total capacity while keeping active computation per token lower than a dense model of equal total size. This changes every comparison table. A serious report must distinguish total parameters, active parameters, router strategy, number of selected experts, auxiliary losses, expert parallelism, and the hardware used for inference. Kimi K2-style systems make this point visible by combining very large total parameter counts with much smaller active parameter counts \cite{kimi2025k2}. The relevant research question is not whether MoE is stronger in the abstract. It is when sparse routing produces better quality per dollar under realistic traffic.
+
+The second pressure point is attention memory. Grouped-query attention and multi-query attention reduce KV-cache size, but new designs also explore latent attention, recurrent state, state-space models, and external memory. RetNet, Mamba, Mamba-2, and Titans show different ways to challenge standard attention scaling \cite{sun2023retnet,gu2023mamba,dao2024mamba2,behrouz2025titans}. The evaluation burden is high: efficient long-context mechanisms must demonstrate not only perplexity but also retrieval, aggregation, contradiction handling, instruction following, and post-training compatibility.
+
+The third pressure point is native multimodality. A vision-language model that bolts a vision encoder onto a text model is easier to build, but a native multimodal system may handle interleaved video, audio, speech, and tool outputs more coherently. The tradeoff is engineering complexity. Token budgets, streaming latency, modality-specific safety policies, and provenance become part of the architecture.
+
+The fourth pressure point is trainability. Optimizers, initialization, normalization, clipping, and precision formats matter more as models become sparse, deeper, longer-context, and more heterogeneous. Architecture cannot be separated from the training run that makes it stable.
+
+\section{Reasoning and Adaptive Test-Time Compute}
+\label{sec:adaptive-test-time-compute}
+
+Reasoning is now a compute-allocation problem. A model can answer with a short response, produce a long trace, sample many candidates, call tools, run code, retrieve documents, search a tree, or ask a verifier to choose. These choices spend different kinds of budget. Test-time scaling surveys increasingly organize the field by what is scaled, how it is scaled, where in the pipeline scaling occurs, and how quality should be measured \cite{zhang2025testtimescaling}. Budget-oriented surveys add another distinction: fixed controllability under a user-specified budget versus adaptive allocation based on difficulty, confidence, or intermediate evidence \cite{alomrani2025budget}.
+
+This book therefore treats a reasoning method as incomplete unless it states five things. First, what candidates are generated? Second, what scores or verifiers are trusted? Third, how much compute is spent and who controls that budget? Fourth, how does the method fail under adversarial or out-of-distribution prompts? Fifth, are gains due to a stronger policy, more search, better selection, benchmark contamination, or easier refusal behavior?
+
+RLVR and GRPO-style training sharpen these questions. A reward that checks final answers can scale cheaply, but it may reward shortcuts. A process reward can guide intermediate steps, but labels are more expensive and can still be gamed. A group-relative baseline can simplify training by avoiding a learned critic, but it depends on group diversity. The same model can look better at pass@1 and worse at pass@k, or better under one token budget and worse under another. Evaluation must therefore report success, cost, latency, abstention, and failure modes together.
+
+\section{Data, Evaluation, and Governance as One Loop}
+\label{sec:data-evaluation-governance-loop}
+
+The data chapter and the evaluation chapter should be read as one loop. Data filtering creates the distribution a model learns. Evaluation claims what the model can do. Governance decides which data and evaluations are allowed to influence deployment. When these are separated, teams can accidentally optimize toward contaminated benchmarks, unsafe synthetic data, or metrics that are detached from user risk.
+
+A current data pipeline should record source licenses, collection dates, filtering rules, deduplication method, personally identifiable information policy, language distribution, document quality scores, synthetic-data generator versions, and benchmark overlap checks. A current evaluation pipeline should record prompt templates, decoding settings, tool permissions, retrieval indexes, judge models, human rubrics, confidence intervals, and failure slices. A current governance review should connect those artifacts to release decisions: what model is being launched, for whom, under what constraints, with what monitoring, and with what rollback path.
+
+This is also where CS336-style implementation and frontier research meet. Data assignments that process Common Crawl, scaling assignments that fit loss curves, and alignment assignments that train reasoning models are not isolated course tasks. They are a compressed version of the lifecycle that real model teams must make auditable \cite{stanfordcs3362026}.
+
+\section{A Reader's Roadmap After This Book}
+\label{sec:reader-roadmap}
+
+The reader should leave the book with four durable habits. First, reduce every model claim to a contract: objective, data, architecture, training recipe, inference policy, and evaluation protocol. Second, implement the smallest system that exposes the relevant invariant. Third, compare models by task, cost, and risk rather than by name. Fourth, treat new papers as evidence to be tested, not as recipes to copy.
+
+For further study, build projects in increasing order of coupling. Begin with a tokenizer and small GPT. Add a clean training loop and resource accounting. Add a data pipeline with deduplication and contamination checks. Add LoRA and SFT. Add a small RAG benchmark with retrieval recall and answer faithfulness. Add a preference model and DPO baseline. Add a verifiable math or code task and compare SFT, rejection sampling, and GRPO-style RL. Add an inference service with KV-cache measurement and latency percentiles. Add one multimodal component and evaluate perception separately from reasoning.
+
+The frontier will change. This roadmap is meant to survive that change. If a future model family replaces attention, it will still need data, optimization, serving, adaptation, evaluation, and governance. If a future reasoning method replaces GRPO, it will still need reward design, budget accounting, and robustness tests. If a future multimodal system becomes native across all modalities, it will still need temporal grounding, privacy controls, and pipeline-level evaluation. The field rewards novelty, but engineering progress depends on preserving these invariants.
+
+\section{Key Terms}
+\label{sec:frontier-key-terms}
+
+\begin{description}[Adaptive test-time compute]
+\item[Adaptive test-time compute] Inference that allocates different amounts of reasoning, search, retrieval, or verification to different inputs based on difficulty, uncertainty, or policy.
+\item[Disaggregated inference] A serving architecture that separates stages such as prefill and decode, or attention and feed-forward computation, so they can scale on different resources.
+\item[From-scratch implementation] A learning and validation method in which key components are built directly to expose assumptions about data, tensors, optimization, and systems costs.
+\item[Native multimodality] A model or system design that handles modalities such as text, images, audio, video, and speech as first-class inputs or outputs rather than as late add-ons.
+\item[Resource accounting] Quantitative reporting of memory, FLOPs, bandwidth, tokens per second, latency, and cost for training or inference decisions.
+\end{description}
+
+\section{Exercises}
+\label{sec:frontier-exercises}
+
+\begin{enumerate}
+\item Choose one chapter of this book and design a CS336-style implementation assignment for it. Specify correctness tests, resource metrics, and failure analyses.
+\item Compare a dense decoder model and an MoE model using total parameters, active parameters, routing overhead, KV-cache cost, and expected serving latency. Explain which number is most misleading if reported alone.
+\item Design an adaptive test-time compute policy for math questions. State how the system decides between a short answer, long reasoning, sampling, tool use, and abstention.
+\item Extend a RAG evaluation to include governance. Add fields for data license, access control, prompt-injection testing, citation faithfulness, and rollback criteria.
+\item Pick one frontier paper from 2025 or later and identify which claim would fail if the evaluation used a different tokenizer, data mixture, inference budget, or benchmark split.
+\end{enumerate}
