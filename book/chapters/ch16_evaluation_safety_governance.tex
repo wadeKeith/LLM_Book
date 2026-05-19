@@ -60,6 +60,10 @@ Agentic evaluations add another layer. SWE-bench tests whether a model or agent 
 
 Generative multimodal systems need still different evidence. A text-to-image or text-to-video model should be evaluated for instruction following, visual fidelity, typography, object relations, temporal consistency, editing locality, diversity, safety filtering, and provenance. Unified understanding-generation systems need cross-task regression checks: improving image generation should not silently degrade OCR, document QA, speech latency, or refusal behavior. Janus-Pro, MMaDA, Sora-style video generation, and AR-Omni illustrate why one average score cannot represent a system that both understands and creates media \cite{chen2025januspro,yang2025mmada,openai2024sora,cheng2026aromni}.
 
+Video deserves its own caution. VBench++ dissects video generation into fine-grained dimensions such as temporal flicker, subject consistency, motion smoothness, spatial relationship, text-to-video, image-to-video, and trustworthiness \cite{huang2024vbenchpp}. Physics-oriented benchmarks such as T2VPhysBench ask whether generated videos respect first-principles constraints rather than merely looking plausible \cite{guo2025t2vphysbench}. Video understanding benchmarks are also becoming more diagnostic: TOC-Bench targets temporal object consistency, requiring models to preserve object identity and state across occlusion, disappearance, reappearance, ordering, and interactions \cite{chen2026tocbench}. These evaluations should be read together. A system can be visually impressive, weak at physical consistency, and still poor at object-centric temporal reasoning.
+
+Embodied and action systems add real-world accountability. A VLA benchmark should report task success, recovery after failure, unsafe action rate, intervention rate, latency, embodiment transfer, and whether test tasks share objects, scenes, operators, or teleoperation policies with training data. Simulation can accelerate evaluation, but it is not a substitute for real deployment evidence unless the sim-to-real gap is measured. For robotics, a low average failure rate may still be unacceptable if rare failures damage property or harm people.
+
 \section{Human Evaluation}
 \subsection{Rubrics and Pairwise Preference}
 Human evaluation remains necessary when outputs are open-ended, values are contested, or task success is hard to automate. Pairwise preference is often more reliable than scalar scoring, but it needs a rubric. Annotators should know whether to prioritize factuality over style, safety over completeness, or concision over coverage. Ambiguous prompts should allow ties or ``cannot judge'' labels.
@@ -167,7 +171,9 @@ Governance needs technical levers, but none should be oversold. Mechanistic inte
 
 Unlearning addresses a different question: how can a model be made to stop producing or relying on targeted knowledge, private data, copyrighted material, or unsafe capabilities after training? Surveys of LLM unlearning emphasize that removal claims require careful evaluation of retained utility, extraction resistance, relearning risk, and collateral damage \cite{qiu2025unlearning}. A model that stops answering one memorized prompt may still leak the same information through paraphrase, retrieval, or fine-tuning.
 
-Watermarking and provenance tools aim to identify generated content or trace model outputs. Token-level watermarking schemes can bias sampling so generated text carries a detectable statistical signal \cite{kirchenbauer2023watermark}. For multimodal generation, provenance also includes metadata, content credentials, visible labels, model cards, and platform policy. Watermarks can be removed, paraphrased away, or broken by distribution shift, so they should be treated as one evidence layer rather than as a complete solution to misinformation, copyright, or accountability.
+Watermarking and provenance tools aim to identify generated content or trace model outputs. Token-level watermarking schemes can bias sampling so generated text carries a detectable statistical signal \cite{kirchenbauer2023watermark}. For multimodal generation, provenance also includes metadata, content credentials, visible labels, model cards, and platform policy. NIST's synthetic-content transparency report treats authentication, provenance tracking, labeling, watermarking, detection, testing, and auditing as complementary technical approaches rather than a single silver bullet \cite{nist2024syntheticcontent}. C2PA specifications define a technical standard for certifying the source and history of media content through content credentials and related provenance artifacts \cite{c2pa2026spec}.
+
+These tools are necessary but limited. Metadata can be stripped, visual watermarks can be cropped, statistical watermarks can be weakened by paraphrase or editing, and provenance chains can become ambiguous when generated assets are remixed. A governance policy should therefore layer signals: model-side watermarking, signed content credentials, visible labeling where appropriate, platform detection, user reporting, and incident response. The release decision should state which signals are required for which modalities and what the system does when provenance is absent or conflicting.
 
 \subsection{Operational Monitoring}
 Pre-deployment evaluation is a snapshot. Deployed systems face changing users, prompts, tools, laws, and adversaries. Monitoring should track:
@@ -215,6 +221,7 @@ Governance & Can decisions be audited? & Model card, data documentation, policy 
     \item[Red teaming.] Adversarial testing intended to discover failures.
     \item[Unlearning.] A post-training intervention intended to remove or suppress targeted knowledge or behavior while preserving unrelated capability.
     \item[Watermarking.] A method for embedding or detecting statistical or metadata signals that indicate generated content.
+    \item[Content credentials.] Cryptographically signed provenance metadata describing the source, edits, or generative process associated with a media asset.
     \item[Model card.] Structured documentation of model use, evaluation, and limitations.
     \item[Risk management.] The process of identifying, measuring, mitigating, monitoring, and governing risks.
 \end{description}
@@ -226,6 +233,8 @@ Governance & Can decisions be audited? & Model card, data documentation, policy 
     \item Run a pairwise human evaluation on twenty prompts with two model variants. Compute win rate and a bootstrap confidence interval.
     \item Design an LLM-as-judge prompt for factual QA. Then list at least five judge biases and how you would test for them.
     \item Design an evaluation card for a unified text-image model. Include separate metrics for understanding, generation, editing, safety, and provenance.
+    \item Design a video-generation evaluation that separates visual quality, prompt faithfulness, temporal consistency, physical consistency, and provenance.
+    \item Write a launch checklist for a VLA robot policy. Include simulation evidence, real-world trial evidence, unsafe-action handling, human intervention, and rollback.
     \item Create a safety evaluation matrix with allowed, disallowed, and redirect examples for three policy categories.
     \item Propose an unlearning evaluation for a small memorized corpus. Include extraction prompts, utility regression tests, and relearning checks.
     \item Draft a one-page incident response plan for a deployed chatbot that produces unsafe or defamatory content.
