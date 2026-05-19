@@ -1,0 +1,23 @@
+\chapter{Inference and Serving}
+\label{ch:inference-serving}
+
+\abstract{This chapter studies LLM inference as a systems problem. It covers prefill versus decode, KV caches, batching, paged attention, quantization, speculative decoding, streaming APIs, load testing, and latency-throughput tradeoffs.}
+
+\section{Chapter Spine}
+Serving is not just running the training model in evaluation mode. Autoregressive decoding changes the compute shape, and user-facing systems must manage memory, queues, context length, and streaming behavior under load.
+
+\section{Core Sections}
+\subsection{Prefill, Decode, and the KV Cache}
+Why prompt processing and token generation stress different resources.
+
+\subsection{Batching and Memory Management}
+Continuous batching, paged attention, cache eviction, and fragmentation \cite{kwon2023efficient}.
+
+\subsection{Compression and Acceleration}
+Weight-only quantization, activation quantization, speculative decoding, and hardware-specific kernels.
+
+\subsection{API Behavior and Load Testing}
+Streaming responses, request cancellation, timeout policy, tokens per second, requests per second, and tail latency.
+
+\section{Planned Exercises}
+Design a load-test table that reports throughput, average latency, tail latency, and cost per million tokens.

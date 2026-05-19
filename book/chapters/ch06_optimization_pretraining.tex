@@ -1,0 +1,23 @@
+\chapter{Optimization and Pretraining}
+\label{ch:optimization-pretraining}
+
+\abstract{This chapter links scaling laws to pretraining recipes. It covers objective design, AdamW, learning-rate schedules, warmup, gradient clipping, stability, checkpointing, data order, loss prediction, and compute-optimal planning.}
+
+\section{Chapter Spine}
+Pretraining is a joint optimization over model size, token budget, data mixture, precision, and hardware throughput. Scaling laws provide planning tools, but they do not remove the need for careful loss monitoring and failure analysis \cite{kaplan2020scaling,hoffmann2022training}.
+
+\section{Core Sections}
+\subsection{Optimizer Mechanics}
+AdamW, weight decay, gradient clipping, warmup, cosine decay, and parameter groups.
+
+\subsection{Stability at Scale}
+Initialization, normalization, loss spikes, mixed precision, checkpoint recovery, and monitoring.
+
+\subsection{Compute-Optimal Planning}
+Parameter-token tradeoffs, FLOPs estimates, sequence length, and undertraining.
+
+\subsection{From Historical Claims to Current Practice}
+What older scaling laws explain well, what later model reports changed, and where empirical judgment still dominates.
+
+\section{Planned Exercises}
+Estimate the compute budget for several model-token configurations and compare the resulting memory and throughput constraints.

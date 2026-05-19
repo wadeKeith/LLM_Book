@@ -1,0 +1,23 @@
+\chapter{From Transformer to GPT}
+\label{ch:from-transformer-to-gpt}
+
+\abstract{This chapter specializes the \transformer into a causal decoder. It covers next-token loss, GPT-style blocks, sampling, repetition control, loss curves, minimal training loops, and efficient attention as used in practical GPT implementations.}
+
+\section{Chapter Spine}
+GPT is not merely a \transformer with a different name; it is a causal training and generation interface. The chapter moves from the decoder block to cross-entropy training, then from logits to sampling behavior.
+
+\section{Core Sections}
+\subsection{Causal Language Modeling}
+Teacher forcing, shifted labels, cross-entropy, perplexity, and batch packing.
+
+\subsection{Minimal GPT Implementation}
+Configuration, block stack, tied embeddings, optimizer groups, and checkpointing.
+
+\subsection{Decoding}
+Greedy decoding, temperature, top-$k$, nucleus sampling, repetition penalties, and stop conditions.
+
+\subsection{Attention Efficiency}
+FlashAttention, memory bandwidth, IO-awareness, and why exact attention can be made faster without changing model semantics \cite{dao2022flashattention}.
+
+\section{Planned Exercises}
+Train a toy character-level model, reproduce a loss curve, and compare sampling controls on the same prompt.

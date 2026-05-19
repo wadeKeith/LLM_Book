@@ -1,0 +1,23 @@
+\chapter{Parameter-Efficient Adaptation}
+\label{ch:parameter-efficient-adaptation}
+
+\abstract{This chapter covers adapters, prefix tuning, prompt tuning, LoRA, QLoRA, target-module selection, rank choice, quantization, domain adaptation tradeoffs, and evaluation of adapted models.}
+
+\section{Chapter Spine}
+Parameter-efficient fine-tuning reduces the cost of adaptation by restricting what changes. The important question is not only whether a method trains, but what subspace it can express and what deployment cost it adds.
+
+\section{Core Sections}
+\subsection{Adapters and Prefix Methods}
+Where trainable parameters enter the network and how they affect inference.
+
+\subsection{LoRA}
+Low-rank updates, scaling, rank, target modules, merge behavior, and interference \cite{hu2021lora}.
+
+\subsection{QLoRA and Quantized Training}
+Quantized base weights, optimizer states, memory savings, and quantization error \cite{dettmers2023qlora}.
+
+\subsection{Evaluation of Adaptation}
+Task metrics, regression tests, forgetting, multilingual effects, and safety drift.
+
+\section{Planned Exercises}
+Fine-tune a small model with LoRA, vary rank and target modules, and report both task accuracy and trainable parameter count.

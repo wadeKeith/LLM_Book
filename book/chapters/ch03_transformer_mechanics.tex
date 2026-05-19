@@ -1,0 +1,23 @@
+\chapter{Transformer Mechanics}
+\label{ch:transformer-mechanics}
+
+\abstract{This chapter derives the \transformer from tensor shapes. It explains attention, masking, residual streams, normalization, feed-forward layers, positional information, and the implementation invariants needed to debug a model from first principles.}
+
+\section{Chapter Spine}
+The \transformer is a sequence-to-sequence computation graph whose core operation is content-dependent mixing. The reader should leave this chapter able to predict every major tensor shape in a forward pass and to explain why masking, normalization, and residual connections are necessary.
+
+\section{Core Sections}
+\subsection{Embedding and Positional Information}
+Token embeddings, learned and sinusoidal positions, rotary embeddings, and where position enters attention.
+
+\subsection{Scaled Dot-Product Attention}
+Queries, keys, values, attention scores, softmax, dropout, and numerical stability.
+
+\subsection{Masks and Causality}
+Padding masks, causal masks, attention bias, and encoder-decoder cross-attention.
+
+\subsection{Residual Streams and Feed-Forward Blocks}
+Layer normalization, pre-norm versus post-norm, MLP expansion, gated activations, and residual information flow.
+
+\section{Planned Exercises}
+Implement single-head attention, multi-head attention, and a masked decoder block with shape assertions at every step.

@@ -1,0 +1,23 @@
+\chapter{Domain and Language Adaptation}
+\label{ch:domain-language-adaptation}
+
+\abstract{This chapter studies how LLMs are adapted to Chinese, domain-specific corpora, NL2SQL, medical-style retrieval tasks, and other specialized settings. It compares continual pretraining, supervised fine-tuning, retrieval, tokenizer extension, and evaluation under domain shift.}
+
+\section{Chapter Spine}
+Domain adaptation is not one technique. The right choice depends on whether the missing capability is vocabulary coverage, factual knowledge, style, reasoning format, schema grounding, or access to private documents.
+
+\section{Core Sections}
+\subsection{Language Adaptation}
+Tokenizer extension, bilingual corpora, Chinese LLaMA-style workflows, and multilingual evaluation.
+
+\subsection{Domain Knowledge}
+Continual pretraining versus retrieval versus SFT for specialized knowledge.
+
+\subsection{Structured Tasks}
+NL2SQL, schema linking, execution accuracy, and dataset leakage.
+
+\subsection{Safety in Domains}
+Medical, legal, financial, and organizational settings as high-stakes contexts requiring stronger evaluation.
+
+\section{Planned Exercises}
+Compare a retrieval-only baseline with a LoRA-adapted model on a small domain QA set.

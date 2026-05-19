@@ -1,0 +1,23 @@
+\chapter{Multimodal LLMs}
+\label{ch:multimodal-llms}
+
+\abstract{This chapter introduces multimodal LLMs through CLIP-style representation learning, visual encoders, projection layers, cross-attention, multimodal instruction tuning, image-text evaluation, and safety issues unique to multimodal systems.}
+
+\section{Chapter Spine}
+Multimodal models add another alignment problem: continuous signals such as images, audio, video, or sensor data must be represented in a form a language model can use without losing task-relevant structure.
+
+\section{Core Sections}
+\subsection{Contrastive Pretraining}
+CLIP-style image-text alignment and representation transfer.
+
+\subsection{Connecting Vision and Language}
+Frozen encoders, projection modules, cross-attention, token compression, and end-to-end training.
+
+\subsection{Instruction Tuning for VLMs}
+Image-grounded dialogue, OCR, chart reasoning, visual hallucination, and annotation quality.
+
+\subsection{Evaluation and Safety}
+Multimodal benchmarks, adversarial images, privacy, and domain-specific constraints \cite{han2025multimodal}.
+
+\section{Planned Exercises}
+Trace an image through a frozen vision encoder and projection layer into a language-model prompt.

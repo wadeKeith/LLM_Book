@@ -1,0 +1,23 @@
+\chapter{LLaMA-Class Architectures}
+\label{ch:llama-class-architectures}
+
+\abstract{This chapter studies the architectural conventions used by modern open decoder models: RMSNorm, RoPE, SwiGLU-style feed-forward networks, grouped-query attention, KV cache design, long-context extensions, and mixture-of-experts variants.}
+
+\section{Chapter Spine}
+Modern open LLMs are mostly decoder-only \transformers, but their engineering details matter. LLaMA-class models changed the default block, attention cache, tokenizer, and post-training expectations \cite{touvron2023llama,touvron2023llama2,dubey2024llama3}.
+
+\section{Core Sections}
+\subsection{Normalization and Activations}
+RMSNorm, pre-normalization, SwiGLU, and activation-memory accounting.
+
+\subsection{Rotary Position Embeddings}
+RoPE geometry, extrapolation pitfalls, and long-context scaling.
+
+\subsection{KV Cache and Attention Variants}
+Multi-head, multi-query, grouped-query, and latent attention variants \cite{shazeer2019fast,ainslie2023gqa,deepseek2024v3}.
+
+\subsection{Mixture-of-Experts Models}
+Routing, expert capacity, load balancing, activated parameters, and failure modes in sparse computation.
+
+\section{Planned Exercises}
+Modify a GPT block into a LLaMA-style block and compare parameter count, KV cache size, and forward-pass memory.

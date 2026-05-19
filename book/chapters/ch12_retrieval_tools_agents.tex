@@ -1,0 +1,23 @@
+\chapter{Retrieval, Tools, and Agents}
+\label{ch:retrieval-tools-agents}
+
+\abstract{This chapter covers retrieval-augmented generation, embeddings, vector databases, retrievers, rerankers, chunking, citation faithfulness, tool calls, ReAct-style reasoning-action loops, and agent workflow evaluation.}
+
+\section{Chapter Spine}
+\rag is a control system around an \llm, not a prompt trick. It requires retriever recall, reranker precision, context budgeting, answer synthesis, citation discipline, and defense against prompt injection.
+
+\section{Core Sections}
+\subsection{Retrieval Pipelines}
+Chunking, embeddings, vector search, sparse retrieval, hybrid retrieval, reranking, and freshness.
+
+\subsection{Generation with Evidence}
+Context ordering, attribution, answer abstention, and grounded response criteria \cite{lewis2020retrieval,gan2025rag}.
+
+\subsection{Tool Use}
+Function calls, calculators, databases, code execution, and error recovery.
+
+\subsection{Agentic Workflows}
+ReAct, planning, memory, multi-step tool use, and evaluation of task completion \cite{yao2023react,kimi2025k2}.
+
+\section{Planned Exercises}
+Build a small RAG system, evaluate retrieval recall separately from answer faithfulness, and test a prompt-injection case.

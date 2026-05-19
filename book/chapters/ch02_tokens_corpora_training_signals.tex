@@ -1,0 +1,23 @@
+\chapter{Tokens, Corpora, and Training Signals}
+\label{ch:tokens-corpora-training-signals}
+
+\abstract{This chapter turns raw text into a defensible training signal. It covers tokenization, corpus construction, deduplication, filtering, contamination control, packing, licensing, and the difference between pretraining, instruction, preference, retrieval, and evaluation data.}
+
+\section{Chapter Spine}
+Data is not a passive input to an \llm; it is the main specification of what the model can imitate, remember, refuse, and hallucinate. This chapter will connect byte-level and subword tokenization to multilingual coverage, sequence packing to compute efficiency, and corpus provenance to benchmark validity.
+
+\section{Core Sections}
+\subsection{Tokenization as a Modeling Choice}
+BPE, unigram, byte fallback, vocabulary extension, multilingual token efficiency, and tokenizer-model coupling.
+
+\subsection{Corpus Mixtures and Data Quality}
+Web text, books, code, math, dialogue, domain corpora, decontamination, deduplication, and mixture weighting.
+
+\subsection{Training Signals Beyond Pretraining}
+Instruction data, preference data, verifier data, tool traces, retrieval corpora, and evaluation sets.
+
+\subsection{Provenance and Licensing}
+Copyright, privacy, dataset cards, model cards, and publication-safe reuse of local course assets.
+
+\section{Planned Exercises}
+Build a small tokenizer, measure token efficiency across languages, and run a contamination check between a toy training corpus and a held-out benchmark.

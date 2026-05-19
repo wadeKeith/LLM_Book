@@ -1,0 +1,23 @@
+\chapter{Preference Learning and Alignment}
+\label{ch:preference-learning-alignment}
+
+\abstract{This chapter explains reward modeling, RLHF, PPO, KL regularization, direct preference optimization, reference-free variants, annotation protocols, safety data, and the gap between preference learning and true alignment.}
+
+\section{Chapter Spine}
+Alignment methods optimize models toward a stated preference signal. The hard parts are defining the signal, controlling distribution shift, avoiding reward hacking, and measuring whether the resulting behavior is actually better for the intended users.
+
+\section{Core Sections}
+\subsection{Reward Models}
+Pairwise rankings, Bradley-Terry losses, calibration, annotator disagreement, and overoptimization.
+
+\subsection{RLHF with PPO}
+Policy, reference model, KL penalty, reward shaping, value estimates, and rollout cost \cite{ouyang2022training}.
+
+\subsection{Direct Preference Optimization}
+DPO, reference models, implicit rewards, and stability tradeoffs \cite{rafailov2023direct}.
+
+\subsection{Safety and Refusal}
+Helpfulness-harmlessness tensions, jailbreak resistance, red-teaming, and refusal overgeneralization.
+
+\section{Planned Exercises}
+Train a toy reward model from pairwise preferences and inspect how changing the KL coefficient changes policy behavior.

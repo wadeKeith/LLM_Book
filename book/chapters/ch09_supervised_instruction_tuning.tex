@@ -1,0 +1,23 @@
+\chapter{Supervised Instruction Tuning}
+\label{ch:supervised-instruction-tuning}
+
+\abstract{This chapter explains how pretrained models become instruction-following models through supervised examples. It covers chat templates, task diversity, Alpaca-style self-instruction, synthetic data, refusal data, data quality, and the limits of imitation.}
+
+\section{Chapter Spine}
+Instruction tuning changes the interface a model expects. The chapter separates the historical importance of Alpaca-style recipes from the modern requirements of dataset auditing, chat formatting, safety coverage, and evaluation.
+
+\section{Core Sections}
+\subsection{Instruction Data}
+Prompt-response pairs, multi-turn dialogue, system messages, tool traces, and formatting contracts.
+
+\subsection{Synthetic Data}
+Self-Instruct, distillation from stronger models, diversity filters, and error amplification.
+
+\subsection{Training and Evaluation}
+Loss masking, sequence packing, held-out tasks, refusal behavior, and benchmark leakage.
+
+\subsection{Limits of SFT}
+Why imitation alone does not produce calibrated, harmless, or preference-aligned behavior \cite{ouyang2022training}.
+
+\section{Planned Exercises}
+Convert a raw instruction dataset into a chat template and inspect which tokens should contribute to loss.

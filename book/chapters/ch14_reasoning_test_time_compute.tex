@@ -1,0 +1,23 @@
+\chapter{Reasoning and Test-Time Compute}
+\label{ch:reasoning-test-time-compute}
+
+\abstract{This chapter covers chain-of-thought prompting, self-consistency, process supervision, verifiers, tree search, MCTS-style reasoning, RLVR, GRPO-style training, DeepSeek-R1-style pipelines, and the limits of spending more inference compute.}
+
+\section{Chapter Spine}
+Reasoning methods allocate computation across steps, samples, branches, or verifiers. The chapter treats them as algorithms with budgets and failure modes, not as proof that a model has human-like reasoning.
+
+\section{Core Sections}
+\subsection{Prompted Reasoning}
+Chain-of-thought, self-consistency, decomposition, and when explicit traces help \cite{wei2022chain}.
+
+\subsection{Search and Verification}
+Tree-of-thought, MCTS, process reward models, and verifier validity \cite{yao2023tree}.
+
+\subsection{Reinforcement Learning with Verifiable Rewards}
+RLVR, GRPO-style objectives, reward hacking, and reasoning-boundary evaluation \cite{deepseek2025r1,wen2025rlvr}.
+
+\subsection{Inference-Time Scaling}
+Sequential, parallel, and tree-structured compute; budget forcing; and limitations on knowledge-intensive tasks \cite{chen2025reasoning,yang2025testtime}.
+
+\section{Planned Exercises}
+Compare single-sample answers, self-consistency, and a simple verifier loop on a small math or code benchmark.

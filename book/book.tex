@@ -1,70 +1,78 @@
 %%%%%%%%%%%%%%%%%%%% book.tex %%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%
-% sample root file for the chapters of your monograph or textbook
-%
-% Use this file as a template for your own input.
-%
-%%%%%%%%%%%%%%%% Springer Nature %%%%%%%%%%%%%%%%%%%%%%%%%%
+% Root file for the Overleaf-ready monograph.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-
-% RECOMMENDED %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \documentclass[graybox,envcountchap,sectrefs]{SNmono}
 
-%\usepackage{mathptmx}
-%\usepackage{helvet}
-%\usepackage{courier}
-\usepackage{type1cm}         
+\usepackage{type1cm}
+\usepackage{makeidx}
+\usepackage{graphicx}
+\usepackage{multicol}
+\usepackage[bottom]{footmisc}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{url}
+\usepackage{xspace}
+\usepackage{newtxtext}
+\usepackage[varvw]{newtxmath}
+\usepackage[hidelinks]{hyperref}
 
-\usepackage{makeidx}         % allows index generation
-\usepackage{graphicx}        % standard LaTeX graphics tool
-                             % when including figure files
-\usepackage{multicol}        % used for the two-column index
-\usepackage[bottom]{footmisc}% places footnotes at page bottom
+\newcommand{\llm}{large language model\xspace}
+\newcommand{\llms}{large language models\xspace}
+\newcommand{\transformer}{Transformer\xspace}
+\newcommand{\transformers}{Transformers\xspace}
+\newcommand{\rlhf}{RLHF\xspace}
+\newcommand{\rag}{RAG\xspace}
 
-\usepackage{newtxtext}       % 
-\usepackage[varvw]{newtxmath}       % selects Times Roman as basic font
-
-\makeindex             % used for the subject index
-                       % please use the style svind.ist with
-                       % your makeindex program
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\makeindex
 
 \begin{document}
 
-\author{Author name(s)}
-\title{Book title}
-\subtitle{-- Subtitle (monograph-type) --}
+\author{Wade Keith}
+\title{Large Language Models}
+\subtitle{Foundations, Systems, Alignment, and Applications}
 \maketitle
 
-\frontmatter%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-\include{dedication}
-\include{foreword}
+\frontmatter
 \include{preface}
-\include{acknow}
 \include{ethics}
-
 \tableofcontents
-
 \include{acronym}
 
+\mainmatter
 
-\mainmatter%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-\include{part}
-\include{chapter}
+\part{Foundations}
+\include{chapters/ch01_what_makes_language_models_large}
+\include{chapters/ch02_tokens_corpora_training_signals}
+
+\part{Architectures, Optimization, and Systems}
+\include{chapters/ch03_transformer_mechanics}
+\include{chapters/ch04_from_transformer_to_gpt}
+\include{chapters/ch05_llama_class_architectures}
+\include{chapters/ch06_optimization_pretraining}
+\include{chapters/ch07_distributed_training_systems}
+\include{chapters/ch08_inference_serving}
+
+\part{Adaptation}
+\include{chapters/ch09_supervised_instruction_tuning}
+\include{chapters/ch10_parameter_efficient_adaptation}
+\include{chapters/ch11_domain_language_adaptation}
+
+\part{Alignment, Applications, and Evaluation}
+\include{chapters/ch12_retrieval_tools_agents}
+\include{chapters/ch13_preference_learning_alignment}
+\include{chapters/ch14_reasoning_test_time_compute}
+\include{chapters/ch15_multimodal_llms}
+\include{chapters/ch16_evaluation_safety_governance}
+
+\appendix
 \include{appendix}
 
-\backmatter%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\backmatter
 \include{glossary}
-\include{solutions}
+\bibliographystyle{spmpsci}
+\bibliography{references}
 \printindex
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
 \end{document}
-
-
-
-
-

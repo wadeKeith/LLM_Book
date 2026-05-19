@@ -1,25 +1,7 @@
-%%%%%%%%%%%%%%%%%%%%%%preface.tex%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% sample preface
-%
-% Use this file as a template for your own input.
-%
-%%%%%%%%%%%%%%%%%%%%%%%% Springer Nature %%%%%%%%%%%%%%%%%%%%%%%%
-
 \preface
 
-Use the template \emph{preface.tex} together with the document class \verb|SNmono| (monograph-type books) or \verb|SNmult| (edited books) to style your preface.
+This book is written as a modern, research-grounded introduction to large language models. It uses the local course materials as a coverage map, but the prose, organization, notation, examples, and arguments are original. Each chapter is intended to connect three views that are too often taught separately: the mathematical object being optimized, the system that makes the optimization feasible, and the evaluation procedure that determines whether the result is useful.
 
-A preface\index{preface} is a book's preliminary statement, usually written by the \textit{author or editor} of a work, which states its origin, scope, purpose, plan, and intended audience, and which sometimes includes afterthoughts and acknowledgments of assistance. 
+The book deliberately avoids a repository-by-repository narrative. Instead, it follows the lifecycle of a model: data and tokenization, architecture, pretraining, distributed systems, serving, adaptation, alignment, retrieval, reasoning, multimodality, and safety. Historical systems such as GPT, Alpaca, LoRA, RLHF, and LLaMA are treated as conceptual anchors rather than as recipes to copy without context.
 
-When written by a person other than the author, it is called a foreword. The preface or foreword is distinct from the introduction, which deals with the subject of the work.
-
-Customarily \textit{acknowledgments} are included as last part of the preface.
- 
-
-\vspace{\baselineskip}
-\begin{flushright}\noindent
-Place(s),\hfill {\it Firstname  Surname}\\
-month year\hfill {\it Firstname  Surname}\\
-\end{flushright}
-
-
+The drafting standard is evidence-first. Claims about algorithms, scaling behavior, evaluation, or deployment are tied to primary papers or technical reports whenever possible. Code from the source repository is used as inspiration for reproducible exercises, not as text to paste into the manuscript.

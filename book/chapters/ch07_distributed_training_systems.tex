@@ -1,0 +1,23 @@
+\chapter{Distributed Training Systems}
+\label{ch:distributed-training-systems}
+
+\abstract{This chapter covers the systems layer that makes large-scale training possible: data parallelism, tensor parallelism, pipeline parallelism, fully sharded training, ZeRO-style optimizer partitioning, activation checkpointing, NCCL communication, and throughput accounting.}
+
+\section{Chapter Spine}
+Training systems determine whether a model recipe is feasible. The chapter uses memory and bandwidth accounting as the bridge between algorithmic intent and hardware execution.
+
+\section{Core Sections}
+\subsection{Memory Accounting}
+Parameters, gradients, optimizer states, activations, temporary buffers, and fragmentation.
+
+\subsection{Parallelism Strategies}
+DDP, FSDP, ZeRO, tensor parallelism, pipeline parallelism, expert parallelism, and hybrid layouts.
+
+\subsection{Precision and Communication}
+FP32, BF16, FP16, FP8, loss scaling, collectives, overlap, and network topology.
+
+\subsection{Operational Reliability}
+Checkpoint cadence, resumption, straggler detection, data-loader bottlenecks, and experiment tracking.
+
+\section{Planned Exercises}
+Compute per-GPU memory for a small decoder and explain which parallelism strategy fixes each bottleneck.

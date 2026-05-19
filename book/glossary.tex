@@ -1,22 +1,12 @@
-%%%%%%%%%%%%%%%%%%%%%%acronym.tex%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% sample list of acronyms
-%
-% Use this file as a template for your own input.
-%
-%%%%%%%%%%%%%%%%%%%%%%%% Springer Nature %%%%%%%%%%%%%%%%%%%%%%%%%
+\chapter*{Glossary}
+\addcontentsline{toc}{chapter}{Glossary}
 
-\Extrachap{Glossary}
-
-
-Use the template \emph{glossary.tex} together with the Springer Nature document class SVMono (monograph-type books) or SVMult (edited books) to style your glossary\index{glossary} in the Springer Nature layout.
-
-
-\runinhead{glossary term} Write here the description of the glossary term. Write here the description of the glossary term. Write here the description of the glossary term.
-
-\runinhead{glossary term} Write here the description of the glossary term. Write here the description of the glossary term. Write here the description of the glossary term.
-
-\runinhead{glossary term} Write here the description of the glossary term. Write here the description of the glossary term. Write here the description of the glossary term.
-
-\runinhead{glossary term} Write here the description of the glossary term. Write here the description of the glossary term. Write here the description of the glossary term.
-
-\runinhead{glossary term} Write here the description of the glossary term. Write here the description of the glossary term. Write here the description of the glossary term.
+\begin{description}[Context window]
+\item[Attention] A content-dependent mixing operation that forms query, key, and value representations and aggregates values according to query-key compatibility.
+\item[Context window] The maximum number of tokens a model can condition on during a forward pass.
+\item[Instruction tuning] Fine-tuning a pretrained model on examples that pair user-like instructions with target responses.
+\item[KV cache] Stored key and value tensors from previous decoding steps, reused to avoid recomputing attention over the prefix.
+\item[Preference model] A model or implicit objective that represents which of two candidate responses should be preferred under a target policy or annotation protocol.
+\item[Retrieval-augmented generation] A generation pattern in which external documents are retrieved and inserted into the model context before or during answer generation.
+\item[Test-time compute] Additional computation spent at inference time through longer reasoning traces, multiple samples, verification, search, or refinement.
+\end{description}
