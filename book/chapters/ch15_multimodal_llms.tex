@@ -1,23 +1,211 @@
 \chapter{Multimodal LLMs}
 \label{ch:multimodal-llms}
 
-\abstract{This chapter introduces multimodal LLMs through CLIP-style representation learning, visual encoders, projection layers, cross-attention, multimodal instruction tuning, image-text evaluation, and safety issues unique to multimodal systems.}
+\abstract{This chapter introduces multimodal LLMs through contrastive representation learning, visual encoders, projection layers, query transformers, cross-attention adapters, multimodal instruction tuning, OCR and chart reasoning, image and video token budgets, multimodal evaluation, hallucination, privacy, and safety issues unique to systems that combine language with images, audio, video, and other continuous signals.}
 
-\section{Chapter Spine}
-Multimodal models add another alignment problem: continuous signals such as images, audio, video, or sensor data must be represented in a form a language model can use without losing task-relevant structure.
+\section{Modalities as Interfaces}
+A language model consumes tokens. Images, audio, video, tables, plots, documents, and sensor streams are not naturally token sequences in the same vocabulary. A multimodal LLM must therefore solve an interface problem: convert non-text signals into representations that a language model can use while preserving the information needed for the task.
 
-\section{Core Sections}
-\subsection{Contrastive Pretraining}
-CLIP-style image-text alignment and representation transfer.
+The modern vision-language model (VLM) stack usually contains a modality encoder, a connector, and a language model. The encoder turns an image or video into patches, frames, or embeddings. The connector maps those representations into the language model's hidden space. The language model then performs instruction following, reasoning, and generation. This design inherits strengths and weaknesses from both sides. It can use the language model's broad knowledge and dialogue ability, but it can also hallucinate visually, over-rely on text priors, miss small spatial details, and obey malicious instructions embedded inside images.
 
-\subsection{Connecting Vision and Language}
-Frozen encoders, projection modules, cross-attention, token compression, and end-to-end training.
+This chapter focuses on LLM-centered multimodal understanding: models that take non-text input and produce language or structured text output. Image generation, diffusion models, and full robotics stacks are adjacent topics, but the core engineering ideas here are representation alignment, token budgeting, instruction data, evaluation, and safety.
 
-\subsection{Instruction Tuning for VLMs}
-Image-grounded dialogue, OCR, chart reasoning, visual hallucination, and annotation quality.
+\section{Contrastive Pretraining}
+\subsection{Image-Text Alignment}
+CLIP-style pretraining learns a shared embedding space for images and text using large collections of image-caption pairs \cite{radford2021learning}. Let $f_\theta(I_i)$ be the normalized embedding of image $I_i$, and $g_\psi(T_j)$ be the normalized embedding of text $T_j$. For a batch of $N$ matched pairs, the image-to-text contrastive loss is
+\[
+    \mathcal{L}_{I\rightarrow T}
+    =
+    -\frac{1}{N}
+    \sum_{i=1}^{N}
+    \log
+    \frac{
+        \exp(f_\theta(I_i)^\top g_\psi(T_i)/\tau)
+    }{
+        \sum_{j=1}^{N}
+        \exp(f_\theta(I_i)^\top g_\psi(T_j)/\tau)
+    },
+\]
+with a symmetric text-to-image term. The temperature $\tau$ controls the sharpness of the matching distribution. The model is not trained to generate captions. It is trained to place matched images and texts near each other and unmatched pairs farther apart.
 
-\subsection{Evaluation and Safety}
-Multimodal benchmarks, adversarial images, privacy, and domain-specific constraints \cite{han2025multimodal}.
+This objective is powerful because web-scale captions provide broad supervision. It also has limits. Captions are incomplete, noisy, culturally biased, and often describe salient objects rather than fine-grained spatial relations. A CLIP encoder may know that an image is about a dog on a skateboard while missing whether the dog's left paw touches the wheel. Downstream VLMs inherit these representation gaps unless later training addresses them.
 
-\section{Planned Exercises}
-Trace an image through a frozen vision encoder and projection layer into a language-model prompt.
+\subsection{Zero-Shot Classification}
+CLIP also demonstrates that language can define labels. To classify an image, one embeds prompts such as ``a photo of a cat'' and ``a photo of a dog'', then chooses the text embedding with highest similarity to the image embedding. This is zero-shot transfer through natural-language class descriptions. The same idea appears in retrieval, image clustering, dataset filtering, and weak labeling.
+
+For LLM-centered VLMs, contrastive encoders provide a strong visual backbone, but the assistant still needs a way to condition a generative language model on visual features. That connector is where many architecture differences arise.
+
+\section{Connecting Vision and Language}
+\subsection{Frozen Encoders and Projection Layers}
+The simplest connector freezes a vision encoder and a pretrained LLM, then trains a projection module $P_\eta$:
+\[
+    H_{\mathrm{vis}} = E_{\mathrm{vis}}(I),
+    \qquad
+    Z_{\mathrm{vis}} = P_\eta(H_{\mathrm{vis}}).
+\]
+The projected visual tokens $Z_{\mathrm{vis}}$ are inserted into the LLM context alongside text tokens. LLaVA popularized this recipe for visual instruction tuning by connecting a CLIP vision encoder to a language model and training on image-grounded instruction data \cite{liu2023visual}. The appeal is simplicity: most parameters can remain frozen initially, and the connector learns the alignment.
+
+Projection-only connectors are cheap, but they may pass too many image tokens or fail to select task-relevant details. If the vision encoder emits hundreds or thousands of patch features, each becomes part of the LLM context unless compressed. Long visual prefixes increase prefill cost and compete with text for context window space.
+
+\subsection{Query Transformers and Token Compression}
+BLIP-2 introduced a Querying Transformer (Q-Former) that learns a small set of query tokens to extract information from a frozen image encoder before passing it to a frozen LLM \cite{li2023blip2}. This design reduces the number of visual tokens and creates a trainable bottleneck:
+\[
+    Z_{\mathrm{query}} = Q_\eta(Q_0, E_{\mathrm{vis}}(I)).
+\]
+The bottleneck can improve efficiency and force selection, but it can also discard details needed for OCR, diagrams, or counting. Many systems therefore vary token count by task or resolution: a low-resolution global view for general conversation, higher-resolution crops for documents, and frame sampling for video.
+
+\subsection{Cross-Attention and Interleaved Media}
+Flamingo-style models add cross-attention layers that let the language model attend to visual features while preserving a pretrained language backbone \cite{alayrac2022flamingo}. This design supports interleaved image-text sequences and few-shot multimodal prompting. The model can see examples such as image, question, answer, image, question, answer within a single context.
+
+Cross-attention adapters are more complex than projection layers, but they avoid forcing all visual information into ordinary text-token positions. They also make it easier to handle multiple images or video frames. The tradeoff is implementation complexity, memory use, and the need to train or tune inserted layers across the language model depth.
+
+\subsection{Architecture Tradeoffs}
+\begin{table}[t]
+\centering
+\begin{tabular}{p{0.23\textwidth}p{0.30\textwidth}p{0.32\textwidth}}
+\hline
+Connector & Strengths & Typical risks \\
+\hline
+Linear or MLP projection & Simple, cheap, easy to retrofit to an LLM & Too many tokens; weak spatial grounding; connector bottleneck \\
+Query transformer & Compresses visual features; keeps large backbones frozen & May discard small text or spatial details; extra pretraining stages \\
+Cross-attention adapter & Handles interleaved media; flexible conditioning & More invasive architecture changes; higher memory cost \\
+End-to-end multimodal training & Can optimize perception and language jointly & Expensive; greater risk of forgetting and data imbalance \\
+\hline
+\end{tabular}
+\caption{Common connector designs for LLM-centered multimodal models.}
+\label{tab:vlm-connectors}
+\end{table}
+
+\section{Multimodal Instruction Tuning}
+\subsection{Training Stages}
+A practical VLM is rarely trained in one stage. A common sequence is:
+\begin{enumerate}
+    \item Pretrain or choose a vision encoder using contrastive or supervised vision-language data.
+    \item Train a connector on image-caption pairs or image-text matching data.
+    \item Tune the combined model on image-grounded instruction data.
+    \item Add task-specific data for OCR, charts, documents, localization, visual math, or video.
+    \item Add safety and refusal data that includes both text-only and image-conditioned attacks.
+\end{enumerate}
+The order matters. Early connector training teaches the language model to interpret visual embeddings as context. Later instruction tuning teaches conversational behavior and task formats. If the instruction data is too small or too synthetic, the model may learn a superficial response style without robust perception.
+
+\subsection{Data Sources}
+Multimodal instruction data can come from human annotation, synthetic conversations generated by stronger models, templated conversions of existing vision datasets, OCR/document datasets, chart QA datasets, and video QA datasets. Synthetic data is useful for coverage, but it can inject teacher-model hallucinations. Human data is expensive but essential for ambiguous tasks such as describing medical images, evaluating visual quality, or explaining charts for a specific audience.
+
+The dataset should explicitly cover:
+\begin{itemize}
+    \item object recognition, attributes, relations, and counting;
+    \item OCR, handwriting, tables, charts, and diagrams;
+    \item spatial reasoning and localization;
+    \item multi-image comparison;
+    \item visual math and science reasoning;
+    \item uncertainty and abstention when the image is ambiguous or low resolution;
+    \item safety cases where the image changes the policy decision.
+\end{itemize}
+Without such coverage, the VLM may answer from language priors. For example, if a prompt asks what color a stop sign is, a text-only prior may produce ``red'' even when the image is grayscale, occluded, or adversarially edited.
+
+\subsection{Chat Templates with Images}
+Image tokens must be represented in the chat template. A serialized example may look conceptually like:
+\[
+    \texttt{<system>} \; \text{policy}
+    \quad
+    \texttt{<user>} \; \texttt{<image>} \; \text{question}
+    \quad
+    \texttt{<assistant>} \; \text{answer}.
+\]
+The literal tokens differ by implementation, but consistency is critical. Training and inference should use the same role markers, image markers, and ordering. Multi-image prompts need unambiguous references: ``first image'', ``second image'', bounding boxes, page numbers, or frame timestamps.
+
+\subsection{OCR, Charts, and Documents}
+Document understanding stresses VLMs differently from natural images. The model must read small text, preserve layout, associate labels with values, and reason over tables. Increasing image resolution helps but increases visual tokens. Some systems use specialized OCR tools and feed recognized text to the LLM; others rely on native visual reading. The best choice depends on the domain. OCR tools provide explicit text and coordinates, while native VLMs can combine layout and semantics but may hallucinate characters.
+
+Charts require another layer: the model must map visual marks to quantities. It may need to infer axes, units, legends, and trends. Evaluation should check numerical accuracy, not merely plausible prose. A response that describes a bar chart fluently but swaps the largest and second-largest category is a failure.
+
+\section{Systems Costs}
+\subsection{Visual Tokens and Prefill}
+For text-only LLMs, long prompts increase prefill cost. For VLMs, the image itself can contribute hundreds or thousands of tokens before the user question is considered. If an image is split into $P$ patches and projected to $M$ visual tokens, the LLM prefill length becomes approximately
+\[
+    L_{\mathrm{prefill}}
+    =
+    L_{\mathrm{text}} + M.
+\]
+Attention cost during prefill grows roughly quadratically in total context length for standard attention, though optimized kernels and attention variants change constants. This makes high-resolution images, multi-page documents, and video expensive.
+
+\subsection{Video and Audio}
+Video adds a temporal dimension.\index{video-language model}\index{audio-language model} A naive system that encodes every frame quickly exhausts context and compute. Practical systems sample frames, detect scene changes, compress frame features, or use a video encoder before the LLM. Video-LLaVA-style systems align image and video features before projection so that a language model can consume a unified visual representation \cite{lin2023videollava}. Audio similarly requires chunking, spectrogram or codec features, speech recognition, speaker or prosody handling, and temporal alignment. AudioPaLM-style systems connect text and speech models so that speech recognition, speech translation, and speech generation can share a language-model backbone \cite{rubenstein2023audiopalm}. Omni models such as Qwen2.5-Omni make the deployment contract harder still: they must stream over text, image, audio, and video inputs while generating text or natural speech responses \cite{qwen2025omni}.
+
+Temporal grounding is the core evaluation problem. A model may answer a global question about a video while failing to identify the frame, timestamp, or spoken segment that supports the answer. A publishable video or audio evaluation should separate event detection, temporal localization, transcription quality, speaker attribution, cross-modal coreference, and final reasoning. It should also report whether external tools are used. Tool-assisted OCR, ASR, chart extraction, object detection, or browser automation can make a system far stronger than a pure end-to-end model, but then the evaluation is of a pipeline, not only of a checkpoint.
+
+System designers should report:
+\begin{itemize}
+    \item maximum image resolution and resizing policy;
+    \item number of visual tokens per image or frame;
+    \item frame sampling rate for video;
+    \item whether OCR, ASR, or other tools are used;
+    \item latency split between encoder, connector, LLM prefill, and decode;
+    \item memory impact on batching and KV cache.
+\end{itemize}
+Without these details, benchmark numbers are hard to interpret and deployment costs are hard to predict.
+
+\section{Evaluation}
+\subsection{Benchmark Families}
+Multimodal evaluation must test perception and reasoning separately. MMMU evaluates multimodal understanding across expert-level disciplines \cite{yue2023mmmu}; MathVista focuses on mathematical reasoning in visual contexts \cite{lu2023mathvista}. POPE and HallusionBench probe visual hallucination and visual illusion failure modes \cite{li2023pope,guan2023hallusionbench}. Recent frontier and open reports, including GPT-4o and Qwen2.5-VL, report broad multimodal capability and safety evaluations \cite{openai2024gpt4o,qwen2025vl,han2025multimodal}.
+
+Benchmarks should be interpreted by task type. A model can be strong at OCR and weak at spatial reasoning, or strong at captioning and weak at chart arithmetic. A single leaderboard score is not a capability profile.
+
+\subsection{Evaluation Cautions}
+Key cautions include:
+\begin{description}
+    \item[Language leakage.] Questions may be answerable from text priors without inspecting the image.
+    \item[Shortcut OCR.] Datasets may contain visible text that gives away labels without visual reasoning.
+    \item[Resolution sensitivity.] A model may fail because preprocessing made the relevant detail unreadable.
+    \item[Answer parsing.] Free-form answers can hide wrong units, swapped labels, or approximate numbers.
+    \item[Contamination.] Public benchmark images and answers may appear in training data.
+    \item[Tool ambiguity.] A model using OCR or retrieval is not directly comparable to one using only pixels.
+\end{description}
+For serious deployments, create in-domain tests with private images, controlled perturbations, and human review of failures.
+
+\section{Safety and Governance}
+\subsection{Visual Prompt Injection}
+Images can contain instructions. A screenshot may say ``ignore previous instructions'', a document may include hidden white text, or a QR code may point to malicious content. If the VLM treats image text as user instruction rather than untrusted data, it can be prompt-injected. Visual jailbreaks such as typographic prompts demonstrate that safety training for text-only models does not automatically transfer to vision-language systems \cite{gong2023figstep}. MM-SafetyBench-style evaluations show that harmful requests can be smuggled or amplified through images \cite{liu2023mmsafetybench}.
+
+A robust system distinguishes instruction channels from content channels. Text extracted from an image should usually be treated as quoted content, not as a higher-priority instruction. Tool outputs, OCR text, and image captions should be wrapped with provenance markers before being passed to the language model.
+
+\subsection{Privacy and Sensitive Inference}
+Images often contain faces, addresses, medical information, documents, screens, location clues, and bystanders. A VLM can infer sensitive attributes even when the user did not ask for them. Policies should define which inferences are allowed, which require consent, and which should be refused. Logging and retention rules are especially important for multimodal systems because raw images are more identifying than many text prompts.
+
+\subsection{Hallucination and Grounding}
+Visual hallucination occurs when a model asserts objects, text, actions, or relations not supported by the image. It can come from language priors, weak visual features, low resolution, or overextended reasoning. Mitigations include higher-resolution crops, object detectors, OCR verification, uncertainty prompts, and training data with negative examples. The model should learn to say ``I cannot tell from this image'' when evidence is insufficient.
+
+\section{Implementation Notes}
+A minimal VLM implementation plan is:
+\begin{enumerate}
+    \item Choose the visual domains: natural images, screenshots, documents, charts, video, or medical imagery.
+    \item Select a vision encoder and decide whether it is frozen, partially tuned, or trained end to end.
+    \item Choose a connector and visual-token budget.
+    \item Define the multimodal chat template and image-marker semantics.
+    \item Train the connector before broad instruction tuning unless using an already aligned VLM backbone.
+    \item Build evaluation slices for perception, OCR, spatial reasoning, chart reasoning, safety, and refusal.
+    \item Measure latency and memory by separating encoder, prefill, and decode costs.
+    \item Add prompt-injection defenses for image text and document content.
+\end{enumerate}
+
+\section{Key Terms}
+\begin{description}
+    \item[Vision encoder.] A model that maps images or video frames into feature representations.
+    \item[Contrastive learning.] Training matched image-text pairs to be close in embedding space and mismatched pairs far apart.
+    \item[Connector.] A projection, query transformer, or adapter that maps modality features into the LLM interface.
+    \item[Visual token.] A representation of image content inserted into or attended by the language model.
+    \item[Q-Former.] A query transformer that compresses visual features into a small set of learned query outputs.
+    \item[Visual hallucination.] A claim about image content that is not supported by the image.
+    \item[Visual prompt injection.] Malicious or conflicting instructions embedded in image or document content.
+    \item[Grounding.] The degree to which a response is supported by specific parts of the input modality.
+\end{description}
+
+\section{Exercises}
+\begin{enumerate}
+    \item Derive the symmetric CLIP loss for a batch of three image-text pairs and identify the positive and negative pairs.
+    \item Trace an image through a frozen vision encoder, projection layer, image marker, and language model context. List the tensor shapes at each step for a chosen patch size.
+    \item Compare two connector designs for a document QA system: an MLP projection with many visual tokens and a query transformer with compressed tokens. Discuss accuracy and cost tradeoffs.
+    \item Build a small evaluation set with five natural images, five screenshots, and five charts. Write separate scoring criteria for perception, OCR, and reasoning.
+    \item Create three visual prompt-injection examples in a benign test environment. Propose a serialization strategy that treats image text as untrusted content.
+    \item Measure how resizing an image affects OCR accuracy for a VLM or OCR tool. Report the smallest text size that remains reliable.
+\end{enumerate}

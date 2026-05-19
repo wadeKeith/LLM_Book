@@ -1,23 +1,140 @@
 \chapter{Tokens, Corpora, and Training Signals}
 \label{ch:tokens-corpora-training-signals}
 
-\abstract{This chapter turns raw text into a defensible training signal. It covers tokenization, corpus construction, deduplication, filtering, contamination control, packing, licensing, and the difference between pretraining, instruction, preference, retrieval, and evaluation data.}
+\abstract{This chapter turns raw text into a defensible training signal. It covers tokenization, corpus construction, deduplication, filtering, contamination control, packing, licensing, and the difference between pretraining, instruction, preference, retrieval, and evaluation data. The central message is that data is not an inert input. It fixes the model's vocabulary, compute budget, benchmark validity, legal exposure, and much of its downstream behavior.}
 
-\section{Chapter Spine}
-Data is not a passive input to an \llm; it is the main specification of what the model can imitate, remember, refuse, and hallucinate. This chapter will connect byte-level and subword tokenization to multilingual coverage, sequence packing to compute efficiency, and corpus provenance to benchmark validity.
+\section{Data as Specification}
+\label{sec:data-as-specification}
 
-\section{Core Sections}
-\subsection{Tokenization as a Modeling Choice}
-BPE, unigram, byte fallback, vocabulary extension, multilingual token efficiency, and tokenizer-model coupling.
+The first trainable layer of a language model sees integers, not text.\index{tokenization}\index{corpus construction} Everything before that point is a data contract: which documents are admitted, how they are normalized, how they are split into tokens, how examples are packed into sequences, which targets are masked, and which records are reserved for evaluation. A model trained on noisy, duplicated, or legally unusable data can still reduce pretraining loss, but the resulting artifact may be less useful, less trustworthy, and less publishable than a smaller model trained on a better specified corpus.
 
-\subsection{Corpus Mixtures and Data Quality}
-Web text, books, code, math, dialogue, domain corpora, decontamination, deduplication, and mixture weighting.
+Let $\mathcal{D}$ be a collection of documents and let $\tau$ be a tokenizer mapping text strings into token ids. A causal pretraining example is usually a token sequence
+\begin{equation}
+  x_{1:T} = \tau(d)_{1:T},
+\end{equation}
+and the base training signal is the next-token loss
+\begin{equation}
+  \mathcal{L}_{\mathrm{pre}}(\theta)
+  = -\frac{1}{|\mathcal{B}|}\sum_{(x,t)\in \mathcal{B}}
+      \log p_{\theta}(x_t \mid x_{<t}).
+\end{equation}
+The equation hides many decisions. The same document can become a different number of training targets under a different tokenizer; a repeated document can receive many times its intended weight; a benchmark item accidentally included in $\mathcal{D}$ can make a model look more capable than it is; a chat example can train the model to imitate the user if its labels are not masked correctly. Data engineering is therefore part of modeling, not a preprocessing chore.
 
-\subsection{Training Signals Beyond Pretraining}
-Instruction data, preference data, verifier data, tool traces, retrieval corpora, and evaluation sets.
+Table~\ref{tab:data-artifacts} separates common data artifacts by the contract they impose. The same raw string should not be reused casually across these roles. Training data teaches behavior, retrieval data grounds behavior at inference time, preference data changes the model's response distribution, and evaluation data measures behavior. Mixing these roles without tracking provenance creates leakage and invalid comparisons.
 
-\subsection{Provenance and Licensing}
-Copyright, privacy, dataset cards, model cards, and publication-safe reuse of local course assets.
+\begin{table}[t]
+\caption{Data artifacts in an \llm project.}
+\label{tab:data-artifacts}
+\small
+\begin{tabular}{@{}p{2.5cm}p{4.1cm}p{5.2cm}@{}}
+\hline\noalign{\smallskip}
+Artifact & Main Contract & Common Failure Mode \\
+\noalign{\smallskip}\svhline\noalign{\smallskip}
+Tokenizer corpus & Defines reusable units and token efficiency & Rare scripts, code, or domain terms become long token sequences \\
+Pretraining corpus & Supplies dense self-supervised targets & Duplication, low-quality text, private data, or benchmark leakage \\
+Instruction data & Demonstrates desired input-output behavior & Labels train on the prompt, formatting leaks, or style dominates task skill \\
+Preference data & Ranks competing responses under a policy & Annotator preferences are underspecified or reward spurious verbosity \\
+Retrieval corpus & Provides evidence at inference time & Chunks are stale, poorly licensed, badly segmented, or not actually retrieved \\
+Evaluation set & Estimates generalization or safety & Contamination, prompt overfitting, weak rubrics, or hidden distribution shift \\
+\noalign{\smallskip}\hline
+\end{tabular}
+\end{table}
 
-\section{Planned Exercises}
-Build a small tokenizer, measure token efficiency across languages, and run a contamination check between a toy training corpus and a held-out benchmark.
+\section{Tokenization as a Modeling Choice}
+\label{sec:tokenization-modeling-choice}
+
+A tokenizer is a lossy modeling interface even when it is exactly reversible at the byte or character level. It chooses the units over which the model predicts probabilities. Word-level tokenizers have intuitive units but fail on rare words, names, spelling variants, code, and multilingual text. Character-level tokenizers avoid unknown words but make sequences much longer. Subword tokenizers occupy the middle: frequent strings become single tokens, while rare strings decompose into smaller pieces.
+
+Byte-pair encoding (BPE) adapts a compression idea to subword segmentation by repeatedly merging frequent adjacent symbols \cite{sennrich2016neural}. In a simple word-internal version, the initial vocabulary contains characters, and each merge replaces the most frequent pair with a new symbol. After $M$ merges, the final vocabulary contains the original alphabet plus learned merges. Modern GPT-style tokenizers often operate close to bytes so they can represent arbitrary Unicode text without an unknown-token failure. SentencePiece made another important design choice: it trains subword models directly from raw text rather than assuming a pre-tokenized word sequence, and it supports both BPE and unigram language-model tokenization \cite{kudo2018sentencepiece}. These details matter for languages without whitespace word boundaries, code, mathematical notation, and mixed-script documents.
+
+For a corpus $\mathcal{C}$ and tokenizer $\tau$, a useful diagnostic is token efficiency. For language or domain group $g$, define
+\begin{equation}
+  \rho_g = \frac{\sum_{d\in \mathcal{C}_g} \mathrm{bytes}(d)}
+                 {\sum_{d\in \mathcal{C}_g} |\tau(d)|}.
+\end{equation}
+Higher $\rho_g$ means more bytes fit into the same context window. This is not automatically better, because bytes are not semantic units, but a very low value often indicates that the model must spend many decoding steps on text that humans would regard as short. Token efficiency is also an inference cost: autoregressive generation pays one forward pass per output token, so a tokenizer that expands a language by 40\% relative to another tokenizer imposes a direct latency and cost penalty for that language.
+
+The tokenizer and the model checkpoint are coupled. The embedding matrix has shape $V \times d_{\mathrm{model}}$, where $V$ is vocabulary size. Changing the tokenizer after pretraining changes token ids, special-token conventions, and the distribution of sequence lengths. Vocabulary extension can be useful for domain adaptation, but it is not a harmless metadata edit: new rows in the embedding and output matrices must be initialized and trained, old tokens may split the same string differently, and tied input-output embeddings make the change affect both reading and generation. A production system should therefore version the tokenizer, the chat template, special tokens, normalization rules, and model weights together.
+
+\paragraph{Implementation note.}
+A tokenizer pipeline should be tested as a reversible function before it is used for training. The tests should include empty strings, whitespace-only strings, non-ASCII names, code indentation, emoji, malformed Unicode, markup, and the exact special tokens used by the model. If a tokenizer has a beginning-of-sequence token, end-of-sequence token, padding token, or chat role markers, the training code should state which component inserts each token. Silent double insertion of BOS or EOS tokens is a common source of off-by-one labels and surprising loss curves.
+
+\section{Corpus Construction and Mixtures}
+\label{sec:corpus-construction-mixtures}
+
+A corpus record should be more than a text field. A defensible record includes at least a stable document id, source, acquisition date, license or terms category, language, content type, filtering decisions, and enough lineage to reproduce exclusions. In large projects the raw corpus, filtered corpus, tokenized corpus, and packed training stream should have separate manifests. Without those manifests, it is hard to explain why a model learned a behavior, whether a benchmark was contaminated, or whether a source can be redistributed.
+
+Corpus mixtures are usually heterogeneous. Web pages provide scale and diversity; books provide long-form prose; code provides formal syntax and executable patterns; math and scientific text provide notation and derivations; dialogue and instruction data provide interaction patterns; domain corpora provide specialized vocabulary and tasks. If mixture component $i$ contains $D_i$ available tokens and is sampled with probability $p_i$, then a training run of $S$ tokens will expose the model to approximately
+\begin{equation}
+  E_i = S p_i
+\end{equation}
+tokens from that component, possibly over multiple epochs when $E_i > D_i$. A small high-quality component can therefore be intentionally upsampled, but repeated exposure increases memorization and overfitting risk. Mixture weights are modeling assumptions and should be reported with enough precision to interpret downstream behavior.
+
+Filtering is a sequence of recall-precision tradeoffs. Language identification can remove off-target text but harm code-switching and low-resource languages. Quality classifiers can remove boilerplate but also encode the biases of their training labels. Toxicity filters can reduce harmful content but remove documents that discuss abuse, medical issues, or newsworthy events in necessary context. Exact rules should be logged because a model trained on the absence of certain topics can fail just as seriously as a model trained on their worst examples.
+
+Deduplication is both a quality intervention and an evaluation intervention. Exact deduplication removes byte-identical or normalized-identical records. Near deduplication uses shingles, hashes, or embedding-like signatures to remove documents with large overlapping spans. Lee et al. show that duplication in language-model datasets can increase memorized generations and distort validation estimates, and that deduplication can reduce memorization while improving training efficiency \cite{lee2022deduplicating}. The important practical distinction is scope. Deduplicating within the training split reduces overweighted examples; deduplicating between training and evaluation protects benchmark validity; deduplicating across licenses may be required to remove a prohibited source that was mirrored elsewhere.
+
+\paragraph{Implementation note.}
+Store filtering and deduplication decisions as data, not only as logs. A common pattern is a document table with boolean columns such as \texttt{is\_language\_ok}, \texttt{is\_quality\_ok}, \texttt{is\_dedup\_kept}, and \texttt{is\_eval\_overlap}. That table lets later investigators reconstruct why a document is absent from the final training stream without rerunning every expensive filter.
+
+\section{Packing Text into Training Sequences}
+\label{sec:packing-text-training-sequences}
+
+Accelerators prefer dense rectangular tensors, but documents have variable length. A simple batching scheme pads each document to the maximum length in the batch. Padding is easy to reason about, but it wastes compute whenever lengths vary. If a batch has lengths $\ell_1,\ldots,\ell_B$ and maximum length $T$, the useful-token fraction is
+\begin{equation}
+  \eta_{\mathrm{pad}} = \frac{\sum_{b=1}^{B}\ell_b}{BT}.
+\end{equation}
+A value of $\eta_{\mathrm{pad}}=0.55$ means 45\% of attention and feed-forward work is spent on padding positions unless kernels explicitly skip them. Pretraining systems therefore usually concatenate tokenized documents into long streams, insert separator or EOS tokens, and slice fixed-length blocks. This approach keeps utilization high but creates another contract: the model may see unrelated documents adjacent in a context window. EOS tokens, document-boundary masks, or careful packing policies determine whether that adjacency becomes a training signal.
+
+For causal language modeling, a packed block of length $T+1$ often yields inputs $x_{1:T}$ and labels $x_{2:T+1}$. This one-token offset is simple, but it is also the source of many bugs. Padding labels should be set to an ignore index, not to the padding token id, unless the model is intentionally trained to predict padding. In instruction tuning, prompt tokens are commonly masked so that the model is optimized only on the assistant response. If the labels include user tokens, the model is trained partly to imitate the user rather than to answer the user.
+
+Packed datasets also have systems costs. Token streams are large enough that random Python string processing becomes a bottleneck. Practical training pipelines use memory-mapped arrays, binary shards, precomputed indexes, pinned host memory, and asynchronous transfer to the accelerator. Sequence length is a compute multiplier: attention score tensors scale as $BHT^2$ for batch size $B$, heads $H$, and sequence length $T$. Even when efficient attention kernels reduce memory traffic, longer packed blocks still increase arithmetic and KV-cache size.
+
+\section{Training Signals Beyond Pretraining}
+\label{sec:training-signals-beyond-pretraining}
+
+Pretraining supplies broad continuation behavior, but assistant systems need additional signals. Supervised instruction tuning (SFT) trains on demonstrations. A typical record has a prompt, optional context, and a target response. The loss is still cross-entropy, but the label mask changes:
+\begin{equation}
+  \mathcal{L}_{\mathrm{sft}}(\theta)
+  = -\frac{1}{|\mathcal{A}|}\sum_{t\in \mathcal{A}}
+      \log p_{\theta}(x_t \mid x_{<t}),
+\end{equation}
+where $\mathcal{A}$ indexes assistant-response tokens. The formatting template is part of the data. Role tags, stop tokens, and tool-call delimiters must match the inference template, or the model is trained under one protocol and served under another.
+
+Preference data changes the signal from a single target to comparisons. A record may contain a prompt, a chosen response, and a rejected response. \rlhf trains a reward model and then optimizes a policy against that reward under a regularization constraint \cite{ouyang2022training}; direct preference optimization fits a policy more directly from paired preferences \cite{rafailov2023direct}. In both cases, the data does not reveal a universal human preference. It reveals preferences under a rubric, annotator pool, user population, and model sample distribution. Changing any of those can change the meaning of the same pair.
+
+Verifier data and tool traces are yet another signal. A math verifier may label only final answers, intermediate steps, or executable programs. A tool-use trace may include hidden retrieval calls, database queries, or code execution. These traces should be separated from ordinary assistant text because they teach different behavior and may include private credentials, proprietary schemas, or brittle tool outputs.
+
+Retrieval corpora are not training labels, but they are still data. Dense retrieval systems use embedding models and nearest-neighbor indexes to provide evidence at inference time \cite{karpukhin2020dense,lewis2020retrieval}. Their chunking, metadata, freshness, and access controls affect the generated answer as much as the base model does. A retrieval corpus should be evaluated for recall and attribution, not only for downstream answer quality, because a generator can produce plausible answers even when the retriever failed.
+
+\section{Contamination, Evaluation, and Provenance}
+\label{sec:contamination-evaluation-provenance}
+
+Evaluation requires separation between the evidence used for training and the evidence used for measurement. Contamination can be exact, near duplicate, paraphrastic, or procedural. A benchmark solution may appear in a GitHub repository; a multiple-choice question may appear in a web page with reordered options; a code benchmark may be present in a tutorial; a synthetic instruction dataset may have been generated from benchmark prompts. Public benchmarks are especially vulnerable because model developers can optimize prompts, filters, and post-training data against them. Recent work on benchmark leakage and contamination detection should be read as a warning that a high score is not self-validating \cite{shi2023detecting,xu2024benchmark}.
+
+A practical contamination audit should run at several levels: normalized string matching, token n-gram overlap, document-source overlap, and semantic or template-level review for high-value benchmarks. The audit should be asymmetric. It is not enough to ask whether the exact benchmark item appears in training data; one should also ask whether explanations, answer keys, generated variants, or translated versions appear. When a benchmark is used for model selection, its prompts and labels should be access-controlled like test data in any other empirical science.
+
+Provenance and licensing are publication constraints. Notes, slides, notebooks, code repositories, datasets, figures, and model outputs can be useful research artifacts, but they should not be copied into a textbook unless their license and authorship permit it. The safer pattern is to use such material to identify topics and then write original exposition from primary sources. For datasets, provenance review should record the source license, whether redistribution is allowed, whether personal data may be present, whether robots or platform terms restrict collection, and whether generated derivatives can be published.
+
+\section{Key Terms}
+\label{sec:chapter-two-key-terms}
+
+\begin{description}[Decontamination]
+\item[Byte fallback] A tokenizer design that can represent arbitrary text by falling back to byte-level units instead of producing unknown tokens.
+\item[Contamination] Overlap between training or development data and evaluation data that invalidates a generalization estimate.
+\item[Deduplication] Removal or downweighting of exact or near-duplicate records within or across data splits.
+\item[Mixture weight] The probability with which a data component is sampled during training.
+\item[Sequence packing] Concatenating tokenized records into fixed-length training blocks to reduce padding waste.
+\item[Tokenizer-model coupling] The dependency between a model checkpoint and the tokenizer, vocabulary, special tokens, and formatting rules used to train it.
+\end{description}
+
+\section{Exercises}
+\label{sec:chapter-two-exercises}
+
+\begin{enumerate}
+\item Train a tiny BPE tokenizer on a small corpus with English prose, Python code, and Chinese text. Report token counts for the same five strings before and after 50, 500, and 5000 merge operations.
+\item Given three data components with available sizes $D=(20,200,2000)$ million tokens and mixture weights $p=(0.4,0.3,0.3)$, compute how many epochs of each component are seen during a 1 billion token run. Which component has the highest memorization risk?
+\item Design a label mask for a chat SFT example with system, user, assistant, and tool messages. State exactly which tokens contribute to the loss and why.
+\item Implement an exact decontamination check between a toy training set and a toy benchmark using normalized 13-gram overlap. List two cases that this method will miss.
+\item For a retrieval corpus, propose metadata fields that would allow answers to cite source, date, license, and access permissions. Explain how missing metadata can create a safety or publication problem.
+\end{enumerate}

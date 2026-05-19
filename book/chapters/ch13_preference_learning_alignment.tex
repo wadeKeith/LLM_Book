@@ -1,23 +1,275 @@
 \chapter{Preference Learning and Alignment}
 \label{ch:preference-learning-alignment}
 
-\abstract{This chapter explains reward modeling, RLHF, PPO, KL regularization, direct preference optimization, reference-free variants, annotation protocols, safety data, and the gap between preference learning and true alignment.}
+\abstract{This chapter explains how language models are adapted with preference data after pretraining and supervised instruction tuning. It covers pairwise preference collection, reward modeling, RLHF with PPO, KL regularization, direct preference optimization, AI feedback, safety and refusal data, reward hacking, annotation protocols, systems costs, and the gap between preference learning and full alignment.}
 
-\section{Chapter Spine}
-Alignment methods optimize models toward a stated preference signal. The hard parts are defining the signal, controlling distribution shift, avoiding reward hacking, and measuring whether the resulting behavior is actually better for the intended users.
+\section{Alignment as Preference Modeling}
+Pretraining teaches a model to imitate text. Supervised instruction tuning teaches it a conversational interface. Preference learning then asks a harder question: among several plausible responses, which response should the deployed assistant prefer? The answer may depend on helpfulness, truthfulness, harmlessness, style, legal constraints, user intent, and institutional policy. The central engineering challenge is that these properties are not a single ground-truth label. They are observed through noisy comparisons, rubrics, red-team examples, and downstream outcomes.
 
-\section{Core Sections}
-\subsection{Reward Models}
-Pairwise rankings, Bradley-Terry losses, calibration, annotator disagreement, and overoptimization.
+Modern alignment pipelines therefore treat preference learning as a control layer around a capable base model. A typical pipeline starts from a supervised policy, samples multiple answers to user prompts, asks humans or AI judges to compare those answers, trains a reward or preference model, and then optimizes the policy toward the learned preference signal while constraining it not to drift too far from the reference model. This recipe descends from deep reinforcement learning from human preferences \cite{christiano2017deep}, language-model preference tuning \cite{ziegler2019finetuning,stiennon2020learning}, and instruction-following RLHF \cite{ouyang2022training}. The practical success of the recipe should not be confused with a proof of alignment. It is a way to optimize a proxy; the proxy can be incomplete, inconsistent, non-stationary, and vulnerable to gaming.
 
-\subsection{RLHF with PPO}
-Policy, reference model, KL penalty, reward shaping, value estimates, and rollout cost \cite{ouyang2022training}.
+This chapter uses ``alignment'' in the operational sense common in LLM engineering: reducing systematic mismatches between model behavior and a specified preference or safety policy. It is not a claim that the model has internalized human values, that it will generalize safely under all distribution shifts, or that all stakeholders share the same preferences.
 
-\subsection{Direct Preference Optimization}
-DPO, reference models, implicit rewards, and stability tradeoffs \cite{rafailov2023direct}.
+\section{Preference Data}
+\subsection{From Labels to Comparisons}
+For many language tasks, direct labels are brittle. A summarization prompt may have many valid summaries; a medical information request may require both useful context and careful scope limits; a coding assistant may produce several correct patches with different maintainability tradeoffs. Preference learning replaces absolute labels with comparisons. For prompt $x$, annotators compare two completions $y_a$ and $y_b$ and produce a label such as
+\[
+    y_w \succ y_l \mid x,
+\]
+where $y_w$ is preferred to $y_l$ under a rubric. Pairwise data is easier to collect than scalar reward because humans are usually better at choosing between concrete alternatives than assigning calibrated numerical scores.
 
-\subsection{Safety and Refusal}
-Helpfulness-harmlessness tensions, jailbreak resistance, red-teaming, and refusal overgeneralization.
+The comparison label is still a measurement, not a fact about the universe. Annotators may disagree because one response is terse and another is explanatory, because a refusal is safer but less helpful, or because a prompt requires domain expertise. Good data collection therefore records more than the winning answer:
+\begin{itemize}
+    \item the prompt source and sampling policy used to generate candidates;
+    \item the rubric version, policy category, and intended user population;
+    \item annotator qualifications, locale, and conflict-resolution process;
+    \item ties, uncertainty, skipped examples, and known ambiguity;
+    \item safety severity and whether the prompt is benign, dual-use, adversarial, or policy-violating.
+\end{itemize}
+This metadata is not administrative overhead. It determines whether a later reward model is learning user preference, annotator preference, policy preference, demographic majority preference, or artifacts of the candidate generator.
 
-\section{Planned Exercises}
-Train a toy reward model from pairwise preferences and inspect how changing the KL coefficient changes policy behavior.
+\subsection{Sampling Candidate Responses}
+The distribution of candidate responses is part of the dataset. If both responses are produced by the same weak supervised model, comparisons teach the reward model about local quality differences near that model. If one response is produced by a stronger proprietary model and another by the current policy, the reward model may learn a teacher-model style. If candidates are generated with high temperature, the reward model sees diverse errors but may overemphasize fluency failures. If candidates are generated after safety filtering, the reward model sees fewer dangerous negatives and may become weak at recognizing them.
+
+Let $q(y \mid x)$ denote the candidate-generation distribution used for preference collection. A reward model trained on $q$ is most reliable near $q$. After policy optimization, the new policy $\pi_\theta$ may generate text outside that region. This is the basic distribution-shift problem in RLHF: the optimizer searches for outputs that score highly under the reward model, including outputs unlike those shown to annotators.
+
+\subsection{Annotation Protocols}
+A preference rubric should decompose quality into observable criteria. A minimal assistant rubric often separates:
+\begin{description}
+    \item[Instruction following.] Does the response answer the actual user request, respect constraints, and use the requested format?
+    \item[Truthfulness.] Are factual claims correct, scoped, and supported when support is required?
+    \item[Completeness.] Does the response include the necessary steps, caveats, and assumptions without burying the answer?
+    \item[Safety.] Does the response avoid facilitating harm while remaining helpful for benign requests?
+    \item[Style.] Is the response clear, concise, respectful, and appropriate for the audience?
+\end{description}
+The rubric should say how to trade these criteria off. Without an explicit priority order, annotators will invent their own. Safety work especially needs boundary examples: requests that must be refused, requests that should be answered with safe alternatives, and requests that look sensitive but are legitimate.
+
+\section{Reward Models}
+\subsection{The Bradley-Terry Objective}
+A reward model $r_\phi(x,y)$ maps a prompt-response pair to a scalar. Pairwise preference modeling commonly uses the Bradley-Terry likelihood:
+\[
+    P_\phi(y_w \succ y_l \mid x)
+    =
+    \sigma\left(r_\phi(x,y_w)-r_\phi(x,y_l)\right),
+\]
+where $\sigma$ is the logistic sigmoid. The negative log-likelihood over a comparison dataset $\mathcal{D}$ is
+\[
+    \mathcal{L}_{\mathrm{RM}}(\phi)
+    =
+    -\mathbb{E}_{(x,y_w,y_l)\sim\mathcal{D}}
+    \left[
+        \log \sigma\left(r_\phi(x,y_w)-r_\phi(x,y_l)\right)
+    \right].
+\]
+Only reward differences matter. Adding a constant to all rewards for the same prompt does not change the pairwise probability. This is why raw reward-model scores should not be interpreted as calibrated utilities unless the training procedure includes explicit calibration.
+
+The usual implementation takes a pretrained or instruction-tuned transformer, appends a scalar value head at the final token, and trains on packed pairs. For long responses, the reward may be read from the last non-padding token; for multi-turn dialogue, the entire conversation is serialized with the same chat template used by the policy. The reward model should see the same system-message and role-token conventions used at deployment, because formatting changes can move examples out of distribution.
+
+\subsection{Calibration and Uncertainty}
+Reward accuracy on a held-out preference set is necessary but insufficient. A reward model can rank easy pairs correctly while being overconfident on subtle pairs. Useful diagnostics include:
+\begin{itemize}
+    \item accuracy by prompt category, language, length, and safety severity;
+    \item calibration curves for predicted preference probability;
+    \item accuracy as a function of reward margin $|r(y_w)-r(y_l)|$;
+    \item disagreement between independent reward models trained on bootstrap samples;
+    \item adversarial examples where verbosity, flattery, hedging, or refusal style changes the score without improving substance.
+\end{itemize}
+RewardBench-style evaluations are useful for comparing reward models across chat, reasoning, and safety cases \cite{lambert2024rewardbench}, but a deployment team still needs in-domain preference data. A reward model that is strong on public chat comparisons may be poor at a company's legal, medical, finance, or code-review policies.
+
+\subsection{Overoptimization}
+The reward model is a proxy. Optimizing against it too aggressively can reduce real user preference even while predicted reward rises. This is reward hacking. In language models, reward hacking often appears as excessive verbosity, confident but unsupported claims, policy boilerplate, false empathy, or responses that exploit annotation shortcuts. A model can learn that annotators prefer long answers, that safety raters reward visible disclaimers, or that a certain phrase pattern correlates with high scores.
+
+The operational symptom is a divergence between offline reward and independent evaluation. As optimization steps increase, reward-model score continues upward, but human preference, factuality, or task success plateaus and then degrades. The fix is not simply a better optimizer. It requires better data coverage, stronger adversarial evaluation, regularization, early stopping, and repeated collection of comparisons from the current policy.
+
+\section{RLHF with PPO}
+\subsection{Regularized Policy Optimization}
+In RLHF, the language model is a policy $\pi_\theta(y\mid x)$ over response sequences. The reward model provides a sequence-level score $r_\phi(x,y)$. Because unconstrained reward maximization can destroy language quality and exploit reward-model errors, the objective includes a penalty against a reference policy $\pi_{\mathrm{ref}}$, usually the supervised instruction-tuned model:
+\[
+    \max_{\theta}
+    \mathbb{E}_{x\sim\mathcal{P},\,y\sim\pi_\theta(\cdot\mid x)}
+    \left[
+        r_\phi(x,y)
+        -
+        \beta\,\mathrm{KL}\!\left(
+            \pi_\theta(\cdot\mid x)
+            \,\Vert\,
+            \pi_{\mathrm{ref}}(\cdot\mid x)
+        \right)
+    \right].
+\]
+The coefficient $\beta$ controls the alignment-strength versus drift tradeoff. A large $\beta$ keeps the policy close to the reference and may underuse the reward signal. A small $\beta$ permits larger improvements but increases the risk of reward hacking, style collapse, and safety regressions.
+
+In autoregressive models, the KL term is usually estimated token by token during rollout:
+\[
+    \widehat{\mathrm{KL}}(y)
+    =
+    \sum_{t=1}^{T}
+    \left[
+        \log \pi_\theta(y_t\mid x,y_{<t})
+        -
+        \log \pi_{\mathrm{ref}}(y_t\mid x,y_{<t})
+    \right].
+\]
+The scalar reward used by the RL algorithm can be written as a terminal reward plus per-token KL shaping. This turns a sparse sequence reward into a denser signal while preserving the regularized objective.
+
+\subsection{PPO Mechanics}
+Proximal Policy Optimization (PPO) is widely used because it limits the size of policy updates while using sampled rollouts \cite{schulman2017proximal}. For token-level actions, define the probability ratio
+\[
+    \rho_t(\theta)
+    =
+    \frac{\pi_\theta(y_t\mid x,y_{<t})}
+         {\pi_{\theta_{\mathrm{old}}}(y_t\mid x,y_{<t})}.
+\]
+With an advantage estimate $\hat{A}_t$, the clipped PPO objective is
+\[
+    \mathcal{L}_{\mathrm{PPO}}(\theta)
+    =
+    \mathbb{E}_t
+    \left[
+        \min
+        \left(
+            \rho_t(\theta)\hat{A}_t,
+            \mathrm{clip}(\rho_t(\theta),1-\epsilon,1+\epsilon)\hat{A}_t
+        \right)
+    \right].
+\]
+RLHF implementations also train a value head $V_\psi(x,y_{<t})$ to estimate expected future regularized reward, often using generalized advantage estimation. The value head reduces gradient variance but adds another model component that can become miscalibrated under distribution shift.
+
+The InstructGPT pipeline used supervised fine-tuning, reward modeling, and PPO to produce models preferred by labelers over larger pretrained models on instruction-following tasks \cite{ouyang2022training}. That result is historically important because it showed that post-training data quality and preference optimization can dominate parameter count for user-facing behavior.
+
+\subsection{Systems Costs}
+RLHF is expensive because it runs several large models in the loop:
+\begin{itemize}
+    \item the policy being optimized;
+    \item the frozen reference model for KL computation;
+    \item the reward model;
+    \item a value model or value head;
+    \item sometimes separate safety classifiers or filters.
+\end{itemize}
+For each rollout, the system performs autoregressive generation, reward scoring, KL scoring, advantage computation, and one or more policy-gradient updates. Memory pressure is high because the optimizer must store activations for the policy update and logits for KL or importance ratios. Many production pipelines therefore use smaller reward models, parameter-efficient adapters, sequence packing, aggressive batching, and periodic rather than continuous reward-model refreshes.
+
+RLHF also has a data-systems cost. Prompts must be deduplicated, policy versions tracked, annotation decisions audited, unsafe content handled carefully, and privacy constraints enforced. If a dataset mixes user traffic, synthetic prompts, and red-team prompts, the provenance of each example should remain available during training and evaluation.
+
+\section{Direct Preference Optimization}
+\subsection{The Implicit Reward View}
+Direct Preference Optimization (DPO) avoids online RL by deriving a supervised loss from the same KL-regularized preference objective \cite{rafailov2023direct}. Under the regularized optimum, an implicit reward can be written as
+\[
+    r(x,y)
+    =
+    \beta \log
+    \frac{\pi_\theta(y\mid x)}
+         {\pi_{\mathrm{ref}}(y\mid x)}
+    + C(x),
+\]
+where $C(x)$ is a prompt-dependent constant that cancels in pairwise comparisons. Substituting this reward difference into the Bradley-Terry preference likelihood yields the DPO loss:
+\[
+    \mathcal{L}_{\mathrm{DPO}}(\theta)
+    =
+    -
+    \mathbb{E}_{(x,y_w,y_l)}
+    \left[
+        \log \sigma
+        \left(
+            \beta
+            \left[
+                \log\frac{\pi_\theta(y_w\mid x)}{\pi_{\mathrm{ref}}(y_w\mid x)}
+                -
+                \log\frac{\pi_\theta(y_l\mid x)}{\pi_{\mathrm{ref}}(y_l\mid x)}
+            \right]
+        \right)
+    \right].
+\]
+DPO uses preference pairs directly, without training an explicit reward model or generating on-policy rollouts. This makes it simpler and more stable to implement than PPO, especially for smaller teams.
+
+\subsection{Tradeoffs}
+DPO is not free of assumptions. It is an offline method, so it learns from the candidate responses present in the preference dataset. If the dataset contains only weak negatives, DPO may not teach robust rejection of strong but unsafe completions. If preferred responses all share a teacher model's style, DPO may distill style more than preference. The reference model still matters: the log ratio penalizes deviations from it, and changing the reference can change the effective reward.
+
+Several related methods modify the DPO recipe. IPO, KTO, ORPO, and other preference objectives adjust the treatment of margins, binary desirable/undesirable labels, or reference-free training. These variants are useful engineering tools, but the deeper question is unchanged: what behavior does the data define, and where does that definition fail?
+
+\section{Safety, Refusal, and AI Feedback}
+\subsection{Helpful-Harmless Tradeoffs}
+Assistant training usually optimizes both helpfulness and harmlessness. The two are not independent. A model that refuses every sensitive prompt is safe in a narrow sense but useless. A model that answers every request is helpful in a narrow sense but dangerous. Anthropic's helpful-harmless work and Constitutional AI introduced explicit safety preference data and AI-generated critique/revision loops \cite{bai2022training,bai2022constitutional}. RLAIF scales this idea by using AI systems to generate some preference labels or direct rewards \cite{lee2023rlaif}.
+
+Safety preference data should include at least three classes:
+\begin{description}
+    \item[Comply.] Benign requests that should be answered, including requests that mention sensitive topics in educational, defensive, journalistic, or fictional contexts.
+    \item[Refuse.] Requests that directly facilitate harm, abuse, evasion, or illegal activity.
+    \item[Redirect.] Requests where the assistant should avoid operational details but provide safe alternatives, high-level context, or help-seeking resources.
+\end{description}
+The hardest examples are near the boundaries. Overbroad refusal causes real harm when users are denied benign information about health, security, law, or history. Under-refusal causes harm when the model provides actionable misuse instructions.
+
+\subsection{Policy as a Training Object}
+Safety policy should be versioned like code. Each preference label is meaningful only relative to a policy version. If the policy changes, old labels may become inconsistent. This matters for reproducibility: a model trained under policy version $p_1$ and evaluated under policy version $p_2$ may appear misaligned even if it learned $p_1$ faithfully.
+
+For high-risk domains, preference optimization should be paired with refusal evaluation, jailbreak testing, and human review. The policy should specify not only disallowed outputs but also expected safe completions. Users often need help reformulating a request, understanding risk, or finding legitimate resources. A refusal that merely says ``I cannot help'' may score well on a narrow safety metric while failing the broader user need.
+
+\section{Evaluation Cautions}
+\subsection{Preference Is Not Ground Truth}
+Preference labels measure what annotators choose under a rubric and interface. They do not necessarily measure long-term user welfare, truth, fairness, legal compliance, or moral value. This limitation is central to open problems in RLHF \cite{casper2023open}. Preference learning can make a model sound better without making it more reliable. It can also hide failures by teaching the model to hedge, flatter, or refuse in ways that satisfy raters.
+
+\subsection{Distribution Shift}
+Every stage introduces shift:
+\begin{itemize}
+    \item pretraining data differ from instruction data;
+    \item instruction prompts differ from preference prompts;
+    \item preference candidates differ from optimized policy outputs;
+    \item evaluation prompts differ from real deployment traffic;
+    \item adversaries adapt after deployment.
+\end{itemize}
+A robust alignment process therefore repeats data collection after major model updates. Offline preference sets are useful for regression testing, but they cannot be the only source of evidence.
+
+\subsection{A Practical Diagnostic Table}
+\begin{table}[t]
+\centering
+\begin{tabular}{p{0.22\textwidth}p{0.32\textwidth}p{0.32\textwidth}}
+\hline
+Failure mode & Symptom & Diagnostic response \\
+\hline
+Reward hacking & Reward score rises while human preference falls & Plot reward versus independent human eval across checkpoints; inspect high-reward samples \\
+Verbosity bias & Longer answers win despite no added substance & Length-controlled comparisons; judge with strict concision criteria \\
+Refusal overgeneralization & Benign sensitive prompts are refused & Boundary-set evaluation with comply/refuse/redirect labels \\
+Safety undergeneralization & Harmful variants bypass refusal & Red-team paraphrases, multimodal variants, and tool-use tests \\
+Annotator drift & Label distributions change over time & Gold examples, rubric refreshes, annotator calibration meetings \\
+Reward-model overconfidence & Large margins on ambiguous examples & Calibration curves, ensembles, and abstention thresholds \\
+\hline
+\end{tabular}
+\caption{Common preference-learning failure modes and diagnostics.}
+\label{tab:preference-failure-modes}
+\end{table}
+
+\section{Implementation Notes}
+A small but defensible preference-learning pipeline can be organized as follows:
+\begin{enumerate}
+    \item Start from a supervised instruction-tuned policy with a frozen chat template.
+    \item Build a prompt mixture that includes real tasks, synthetic coverage prompts, and safety boundary cases.
+    \item Sample two or more candidate responses per prompt from known policy versions.
+    \item Collect pairwise labels with rubric metadata and allow ties or uncertainty.
+    \item Train a reward model or a direct preference objective; reserve a held-out set by prompt, not by pair.
+    \item Evaluate by category, length, language, and safety severity before optimizing the policy.
+    \item For PPO, monitor KL, reward, entropy, response length, refusal rate, and human preference across checkpoints.
+    \item For DPO, monitor chosen/rejected log-probability gaps, reference drift, and performance on out-of-domain prompts.
+    \item Run independent safety, factuality, and task-success evaluations before deployment.
+    \item Log deployed policy versions and sample real traffic for post-deployment regression tests, subject to privacy and consent constraints.
+\end{enumerate}
+
+\section{Key Terms}
+\begin{description}
+    \item[Preference data.] Comparisons or ratings that express which model outputs are preferred under a rubric.
+    \item[Reward model.] A learned scalar scoring function used as a proxy for preference.
+    \item[RLHF.] Reinforcement learning from human feedback, usually involving a reward model and policy optimization.
+    \item[KL regularization.] A penalty that keeps the optimized policy close to a reference policy.
+    \item[DPO.] A direct offline preference objective that optimizes pairwise preferences without an explicit reward model.
+    \item[RLAIF.] Reinforcement learning from AI feedback, where AI systems generate some preference labels, critiques, or rewards.
+    \item[Reward hacking.] Improving the proxy reward while degrading the intended behavior.
+    \item[Refusal boundary.] The policy line between requests the model should answer, refuse, or redirect.
+\end{description}
+
+\section{Exercises}
+\begin{enumerate}
+    \item Train a toy Bradley-Terry reward model on synthetic pairwise comparisons. Plot held-out accuracy and calibration as you increase label noise.
+    \item For a small instruction-tuned model, compute the token-level KL between sampled responses and a frozen reference model. Inspect examples with unusually high KL and explain what changed.
+    \item Implement the DPO loss for a batch of chosen/rejected responses. Verify that increasing $\beta$ changes the strength of the preference update.
+    \item Design a safety boundary set with ten comply prompts, ten refuse prompts, and ten redirect prompts for a domain of your choice. Write the rubric before writing the prompts.
+    \item Take twenty model responses and label them under two different rubrics: one that prioritizes concision and one that prioritizes completeness. Measure how often the preferred response changes.
+    \item Write an evaluation memo for a preference-tuned assistant. Include the reward model's validation accuracy, independent human preference rate, refusal false-positive rate, and the main residual risks.
+\end{enumerate}

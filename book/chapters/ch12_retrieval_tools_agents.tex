@@ -3,21 +3,167 @@
 
 \abstract{This chapter covers retrieval-augmented generation, embeddings, vector databases, retrievers, rerankers, chunking, citation faithfulness, tool calls, ReAct-style reasoning-action loops, and agent workflow evaluation.}
 
-\section{Chapter Spine}
-\rag is a control system around an \llm, not a prompt trick. It requires retriever recall, reranker precision, context budgeting, answer synthesis, citation discipline, and defense against prompt injection.
+\section{RAG as a Control System}
+\label{sec:rag-control-system}
 
-\section{Core Sections}
-\subsection{Retrieval Pipelines}
-Chunking, embeddings, vector search, sparse retrieval, hybrid retrieval, reranking, and freshness.
+Retrieval-augmented generation, or \rag, is often described as putting documents into the prompt. That description is too small. A production \rag system is a control system around an \llm. It decides what corpus is searchable, how documents are chunked, how queries are rewritten, which retriever and reranker are trusted, how much context is inserted, how the answer should cite evidence, when the model should abstain, and how to defend the system against hostile text inside retrieved documents.
 
-\subsection{Generation with Evidence}
-Context ordering, attribution, answer abstention, and grounded response criteria \cite{lewis2020retrieval,gan2025rag}.
+The basic decomposition is
+\begin{equation}
+  q \rightarrow \mathrm{retrieve}(q) \rightarrow E_k
+  \rightarrow \mathrm{generate}(q,E_k) \rightarrow a,
+  \label{eq:rag-pipeline}
+\end{equation}
+where $q$ is the user query, $E_k$ is a selected evidence set, and $a$ is the answer. RAG originally connected neural retrievers with sequence generators for knowledge-intensive NLP tasks \cite{lewis2020retrieval}. Dense passage retrieval then made learned embedding search a practical alternative to purely sparse lexical search for open-domain question answering \cite{karpukhin2020dense}. Retrieval-augmented pretraining systems such as RETRO showed that retrieval can also be integrated into model training and scaling, not only into prompting \cite{borgeaud2022retro}.
 
-\subsection{Tool Use}
-Function calls, calculators, databases, code execution, and error recovery.
+The central benefit is separation of concerns. Model weights store general linguistic and reasoning behavior; the retrieval layer stores mutable or private evidence. This separation improves freshness, auditability, and access control. It does not guarantee truth. If retrieval misses the relevant document, the generator may hallucinate. If retrieval returns misleading evidence, the generator may faithfully summarize the wrong source. If retrieved text contains instructions to ignore the user or reveal secrets, the generator may follow the wrong authority. The system must therefore evaluate retrieval, generation, and control logic separately.
 
-\subsection{Agentic Workflows}
-ReAct, planning, memory, multi-step tool use, and evaluation of task completion \cite{yao2023react,kimi2025k2}.
+\section{Indexing and Retrieval}
+\label{sec:indexing-retrieval}
 
-\section{Planned Exercises}
-Build a small RAG system, evaluate retrieval recall separately from answer faithfulness, and test a prompt-injection case.
+An index begins with documents, but retrieval usually operates over chunks. Chunking is a modeling decision. Short chunks improve lexical precision and citation granularity, but they can lose context. Long chunks preserve context, but they consume prompt budget and can bury the relevant sentence. Overlap helps when answers cross boundaries, but it increases storage and can produce duplicate evidence. A practical index stores each chunk with stable document id, source, timestamp, permissions, title, section path, and character offsets so that answers can cite and audit the original source.
+
+Dense retrieval embeds queries and chunks into vectors. A typical scoring function is inner product or cosine similarity:
+\begin{equation}
+  s_{\mathrm{dense}}(q,d) =
+  \langle f_q(q), f_d(d) \rangle,
+  \qquad
+  D_k(q)=\operatorname{topk}_{d\in \mathcal{C}} s_{\mathrm{dense}}(q,d).
+  \label{eq:dense-retrieval}
+\end{equation}
+Sparse retrieval, such as BM25-style lexical search, remains valuable because exact names, rare identifiers, error codes, and legal citations often matter. Hybrid retrieval combines dense and sparse signals:
+\begin{equation}
+  s_{\mathrm{hybrid}}(q,d) =
+  \lambda \,\widehat{s}_{\mathrm{dense}}(q,d)
+  + (1-\lambda)\,\widehat{s}_{\mathrm{sparse}}(q,d),
+  \label{eq:hybrid-score}
+\end{equation}
+where scores are normalized before combination. The weight $\lambda$ is a tuning parameter, not a constant of nature.
+
+Query rewriting can improve recall. The system may expand acronyms, generate paraphrases, add domain synonyms, or split a multi-part question into subqueries. In a medical-style retrieval system, for example, a symptom description may be rewritten into several clinically adjacent phrasings before vector search. Rewriting also adds risk: a rewrite can change the user's intent. The original query and all rewrites should be logged, and evaluation should measure whether rewriting improves recall without increasing false positives.
+
+\section{Reranking and Context Construction}
+\label{sec:reranking-context}
+
+Retrievers are usually optimized for recall at a moderate $k$. The generator, however, needs a small set of highly relevant, non-duplicative chunks inside a finite context window. Reranking bridges this gap by scoring query-document pairs with a more expensive model after initial retrieval. A cross-encoder reranker can compare the query and chunk jointly, which is often more precise than independent embeddings, but it is slower and harder to run over a large corpus.
+
+Context construction is not the same as taking the top five chunks. The system should remove near duplicates, respect source permissions, include enough neighboring context for interpretation, and order evidence deliberately. Long-context models do not always use middle-position evidence robustly; performance can be highest when relevant information appears near the beginning or end of the prompt \cite{liu2023lost}. Therefore, rank order, section grouping, and explicit citation markers can affect answer quality.
+
+Table~\ref{tab:rag-design-choices} lists design choices that should be documented in any serious \rag system.
+
+\begin{table}[t]
+\caption{Design choices in a retrieval-augmented generation pipeline.}
+\label{tab:rag-design-choices}
+\small
+\begin{tabular}{@{}p{2.5cm}p{4.2cm}p{4.8cm}@{}}
+\hline\noalign{\smallskip}
+Component & Choice & Failure Mode \\
+\noalign{\smallskip}\svhline\noalign{\smallskip}
+Chunking & Size, overlap, metadata, boundaries & Relevant evidence split or buried \\
+Embedding & Model, normalization, language coverage & Poor recall for domain terms or languages \\
+Retriever & Dense, sparse, or hybrid search & Misses exact ids or semantic paraphrases \\
+Reranker & Cross-encoder, LLM judge, or rules & High precision but high latency or bias \\
+Context builder & Ordering, deduplication, compression & Prompt budget wasted or evidence distorted \\
+Generator & Prompt, citation rules, abstention & Unsupported claims or citation laundering \\
+Monitor & Logs, freshness, drift metrics & Silent index decay or stale answers \\
+\noalign{\smallskip}\hline
+\end{tabular}
+\end{table}
+
+\section{Generation with Evidence}
+\label{sec:generation-with-evidence}
+
+The generator should be instructed to answer from evidence, but instruction alone is insufficient. The prompt should separate system policy, user request, retrieved evidence, and tool outputs. Retrieved text is data, not authority. A document may contain malicious instructions, outdated statements, or user-provided content. The system prompt should state that retrieved documents are untrusted evidence and that higher-priority instructions come from the developer or system layer.
+
+Grounded generation has three obligations. First, the answer should use the evidence that supports the claim. Second, the citation should point to the evidence actually used, not merely to a top-ranked chunk that seems related. Third, the model should abstain or ask for clarification when evidence is missing or conflicting. Recent \rag evaluation surveys emphasize that answer quality, context relevance, citation faithfulness, and robustness should be measured separately \cite{gan2025rag}.
+
+Citation faithfulness is harder than appending source ids. A model can cite a source that does not support the sentence, cite a source that supports only part of the sentence, or synthesize across sources without making the connection clear. A useful answer format ties each factual claim or paragraph to evidence ids and permits ``not found in the provided sources'' as a valid outcome. For high-stakes domains, unsupported claims should be treated as failures even if the natural language is plausible.
+
+Compression is another risk. Systems often summarize retrieved chunks to save context. If the compressor removes uncertainty, dates, exceptions, or source qualifiers, the generator receives distorted evidence. Compression should be evaluated as its own component, and the system should preserve links to the original text for audit.
+
+\section{RAG Evaluation}
+\label{sec:rag-evaluation}
+
+RAG evaluation begins before generation. Retrieval recall asks whether the evidence needed to answer the question appears in the candidate set. If recall is low, no generator can reliably fix the system. Metrics include recall@k, mean reciprocal rank, and normalized discounted cumulative gain when relevance labels are graded. For enterprise systems, labels may come from human annotation, click logs, answer citations, or synthetic questions generated from documents and then audited.
+
+After context construction, evaluate context precision: how much of the inserted context is relevant? A prompt filled with weakly related chunks can lower answer quality and increase cost. Then evaluate answer quality: correctness, completeness, citation support, abstention behavior, and style. These metrics should be reported by slice: document source, document age, language, query type, entity frequency, and permission group.
+
+End-to-end judge scores are useful for triage but dangerous as the only metric. A judge model can reward fluent hallucinations, miss citation errors, or share the same blind spots as the generator. Deterministic checks should be used where possible: exact source id, quote span overlap, executable answer, policy compliance, or database result. Human review remains necessary for subtle factuality and high-stakes claims.
+
+The right baseline matters. Compare against no retrieval, sparse retrieval, dense retrieval, hybrid retrieval, reranking, and an oracle context where the gold evidence is supplied. The gap between oracle-context generation and retrieved-context generation estimates how much quality is being lost in retrieval and context construction. The gap between oracle-context generation and the gold answer estimates generator limitations.
+
+\section{Prompt Injection and Trust Boundaries}
+\label{sec:prompt-injection-trust}
+
+RAG introduces untrusted text into the model's context. A retrieved web page, support ticket, or user document can contain instructions such as ``ignore previous directions'' or ``send the secret key.'' The model sees these tokens in the same context window as legitimate instructions unless the system marks and handles them carefully. This is prompt injection.
+
+The defense is architectural, not just a warning sentence. Retrieved documents should be delimited as data. Tool permissions should be enforced outside the model. Secrets should not be placed in the context unless the current user is authorized to see them. The model should not decide by itself whether a retrieved instruction has authority. Output filters and policy checks can reduce risk, but they cannot recover a design that gives untrusted documents control over tools or credentials.
+
+Evaluation should include injection tests. Place hostile instructions in retrieved chunks, in document metadata, in filenames, and in quoted user text. Test whether the answer follows the hostile instruction, leaks data, corrupts citations, or refuses benign work. These tests should run whenever the prompt template, retriever, tool set, or model changes.
+
+\section{Tool Use}
+\label{sec:tool-use}
+
+Tools extend a language model with actions whose results are not contained in the model weights: calculators, search APIs, databases, code execution, file systems, calendars, ticket systems, and domain services. A tool call usually has a schema, arguments, permissions, execution result, and error channel. Toolformer showed that models can be trained to decide when and how to call simple APIs from self-supervised traces \cite{schick2023toolformer}. In deployed systems, tool use is usually controlled by a runtime that validates schemas and permissions.
+
+A minimal tool loop is
+\begin{equation}
+  a_t \sim p_{\theta}(\cdot \mid h_t), \qquad
+  o_t = \mathrm{Tool}(a_t), \qquad
+  h_{t+1} = h_t \oplus a_t \oplus o_t,
+  \label{eq:tool-loop}
+\end{equation}
+where $h_t$ is the dialogue and state history, $a_t$ may be a tool call or final answer, and $o_t$ is the observation. The runtime, not the model, should validate that $a_t$ is a permitted call. Tool observations should be treated like retrieved evidence: useful, but not automatically higher authority than system instructions.
+
+Error recovery is part of tool competence. The model may call a function with invalid arguments, receive an empty result, exceed a rate limit, or encounter conflicting tool outputs. Training and evaluation should include these cases. A tool-using model that succeeds only when every call works on the first try is not robust.
+
+\section{Agents and Workflows}
+\label{sec:agents-workflows}
+
+An agentic workflow repeatedly chooses actions, observes results, and updates state toward a task goal. ReAct made this pattern explicit by interleaving reasoning traces and actions so that a model can plan, call tools, and revise based on observations \cite{yao2023react}. Modern agentic model reports emphasize coding, tool use, long-horizon tasks, and environment feedback, but the engineering problem remains the same: the system must manage state, tools, permissions, retries, and evaluation \cite{kimi2025k2}.
+
+Planning can help when tasks require many steps, but plans are not guarantees. A plan may be impossible, stale after an observation, or optimized for a proxy goal. Memory can help preserve information across steps, but memory can also store wrong or sensitive content. Reflection can identify mistakes, but it can also rationalize them. Agent design should therefore prefer explicit state machines, typed tool calls, bounded retries, and verifiable checkpoints where the domain allows them.
+
+Evaluation of agents should focus on task completion under constraints, not on whether the transcript looks thoughtful. Useful metrics include success rate, number of tool calls, wall-clock time, cost, rollback rate, permission violations, human interventions, and quality of final artifacts. For coding agents, run tests and inspect diffs. For data agents, verify queries and outputs. For workflow agents, check that the external system ended in the intended state.
+
+\section{Systems Costs}
+\label{sec:rag-agent-systems-costs}
+
+Retrieval, tools, and agents spend inference-time compute. A single user request may trigger embedding calls, vector search, reranking, prompt construction, a long prefill, multiple decode steps, tool calls, retries, and judge evaluations. The cost model is therefore wider than tokens generated by the final answer.
+
+Latency has several components:
+\begin{equation}
+  T_{\mathrm{total}} =
+  T_{\mathrm{rewrite}} + T_{\mathrm{retrieve}} + T_{\mathrm{rerank}} +
+  T_{\mathrm{prefill}} + T_{\mathrm{decode}} + T_{\mathrm{tools}} + T_{\mathrm{postcheck}}.
+  \label{eq:rag-latency}
+\end{equation}
+Optimizing one term can worsen another. Retrieving more chunks may improve recall but increase reranking and prefill time. Compressing chunks may reduce prefill but harm faithfulness. Calling tools can improve correctness but add network latency and failure modes. A production report should include latency percentiles, cost per request, cache hit rate, retrieval recall, answer quality, and safety failures together.
+
+Freshness also has a systems cost. Indexes must be rebuilt or incrementally updated. Deleted documents must be removed from search results. Permission changes must take effect quickly. If the index is stale, a RAG answer may be worse than a base-model answer because it carries the appearance of grounded authority.
+
+\section{Key Terms}
+\label{sec:rag-key-terms}
+
+\begin{description}
+\item[Chunk] A retrievable unit derived from a document, usually with metadata and a pointer back to the source.
+\item[Dense retrieval] Retrieval by learned vector representations and similarity search.
+\item[Hybrid retrieval] Combining dense semantic scores with sparse lexical scores.
+\item[Reranker] A second-stage model or rule that orders retrieved candidates more precisely before context insertion.
+\item[Citation faithfulness] The degree to which cited sources actually support the claims attached to them.
+\item[Prompt injection] An attack in which untrusted text inside context attempts to override higher-priority instructions or exfiltrate data.
+\item[Tool call] A structured action request from the model to an external function, service, or environment.
+\item[Agentic workflow] A bounded loop in which the model selects actions, receives observations, and updates state toward a goal.
+\end{description}
+
+\section{Exercises}
+\label{sec:rag-exercises}
+
+\begin{enumerate}
+\item Build a small RAG benchmark with at least 30 questions and labeled supporting chunks. Report recall@5 before measuring answer quality.
+\item Compare three chunking strategies for the same corpus: short chunks, long chunks, and overlapping chunks. Measure retrieval recall, context precision, and average prompt tokens.
+\item Implement hybrid retrieval using Equation~\ref{eq:hybrid-score}. Sweep $\lambda$ and report which query types prefer dense versus sparse retrieval.
+\item Create five prompt-injection documents and add them to a test index. Measure whether the system follows hostile instructions, leaks hidden text, or corrupts citations.
+\item Design a tool schema for read-only SQL querying. Specify argument validation, permission checks, error messages, and how generated SQL will be sandboxed.
+\item Evaluate an agentic workflow on a real task with a fixed budget. Report success rate, tool calls, cost, latency, and the most common failure mode.
+\end{enumerate}

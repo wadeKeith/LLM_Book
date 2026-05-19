@@ -1,23 +1,243 @@
 \chapter{Reasoning and Test-Time Compute}
 \label{ch:reasoning-test-time-compute}
 
-\abstract{This chapter covers chain-of-thought prompting, self-consistency, process supervision, verifiers, tree search, MCTS-style reasoning, RLVR, GRPO-style training, DeepSeek-R1-style pipelines, and the limits of spending more inference compute.}
+\abstract{This chapter studies reasoning methods for LLMs as algorithms that allocate computation at inference time. It covers chain-of-thought prompting, self-consistency, decomposition, process supervision, verifiers, tree search, MCTS-style reasoning, reinforcement learning with verifiable rewards, GRPO-style training, DeepSeek-R1-style pipelines, budget forcing, frontier reasoning evaluations, systems costs, and the limits of spending more inference compute.}
 
-\section{Chapter Spine}
-Reasoning methods allocate computation across steps, samples, branches, or verifiers. The chapter treats them as algorithms with budgets and failure modes, not as proof that a model has human-like reasoning.
+\section{Reasoning as Budgeted Computation}
+Reasoning is not a single mechanism. In deployed LLM systems, it usually means that the system spends extra computation to improve the chance of a correct answer. The extra computation may appear as a longer generated scratchpad, multiple sampled solutions, a verifier that ranks candidates, a search tree over partial solutions, tool calls, or a policy trained to explore and check its own work.
 
-\section{Core Sections}
-\subsection{Prompted Reasoning}
-Chain-of-thought, self-consistency, decomposition, and when explicit traces help \cite{wei2022chain}.
+This chapter treats reasoning methods as budgeted algorithms. A method should specify what is being computed, how the budget is allocated, how candidate answers are selected, what failure modes are expected, and how the method will be evaluated. Chain-of-thought prompting \cite{wei2022chain}, self-consistency \cite{wang2022self}, process supervision \cite{lightman2023lets}, tree-of-thought search \cite{yao2023tree}, and 2025 reasoning-RL systems such as DeepSeek-R1 \cite{deepseek2025r1} all fit this view. They differ less in their rhetoric than in their allocation of tokens, samples, supervision, and verification.
 
-\subsection{Search and Verification}
-Tree-of-thought, MCTS, process reward models, and verifier validity \cite{yao2023tree}.
+The central caution is that longer reasoning text is not the same as faithful reasoning. A visible trace can be useful working memory, a persuasive explanation, a post-hoc rationalization, or a mixture of all three. Evaluation must therefore separate answer correctness, trace usefulness, trace faithfulness, latency, cost, and robustness under distribution shift.
 
-\subsection{Reinforcement Learning with Verifiable Rewards}
-RLVR, GRPO-style objectives, reward hacking, and reasoning-boundary evaluation \cite{deepseek2025r1,wen2025rlvr}.
+\section{Prompted Reasoning}
+\subsection{Chain of Thought}
+Chain-of-thought (CoT) prompting asks the model to produce intermediate steps before the final answer. In few-shot CoT, the prompt includes examples of step-by-step solutions. In zero-shot variants, the prompt asks for a reasoning process directly. CoT often helps arithmetic, symbolic, commonsense, and multi-hop tasks because it gives the autoregressive model more intermediate tokens on which to condition.
 
-\subsection{Inference-Time Scaling}
-Sequential, parallel, and tree-structured compute; budget forcing; and limitations on knowledge-intensive tasks \cite{chen2025reasoning,yang2025testtime}.
+The simplest abstraction is:
+\[
+    z, a \sim \pi_\theta(\cdot \mid x),
+\]
+where $x$ is the problem, $z$ is a generated reasoning trace, and $a$ is the final answer. The trace is useful when it decomposes the task into intermediate states that make the next-token problem easier. It is harmful when it introduces unsupported assumptions, locks the model into an early mistake, or produces a convincing explanation for an incorrect answer.
 
-\section{Planned Exercises}
-Compare single-sample answers, self-consistency, and a simple verifier loop on a small math or code benchmark.
+CoT has three practical constraints:
+\begin{itemize}
+    \item It consumes output tokens, increasing latency and cost.
+    \item It may expose sensitive intermediate reasoning that a product should not reveal.
+    \item It can be unfaithful: editing or hiding the trace need not preserve the model's true internal computation \cite{lyu2023faithful}.
+\end{itemize}
+For user-facing systems, it is often better to ask the model to use private scratch work and return a concise answer with checkable explanation, rather than expose every intermediate token.
+
+\subsection{Self-Consistency}
+Self-consistency improves over greedy CoT by sampling $K$ reasoning traces and selecting the most common final answer:
+\[
+    \hat{a}
+    =
+    \arg\max_a
+    \sum_{k=1}^{K}
+    \mathbf{1}\{a_k=a\},
+    \qquad
+    z_k,a_k \sim \pi_\theta(\cdot\mid x).
+\]
+The method works when independent samples make different mistakes but the correct answer has higher aggregate probability. It fails when many samples share the same misconception, when final answers are hard to normalize, or when the problem requires a rare insight that the model almost never samples.
+
+Self-consistency is parallelizable. If one sample costs $T$ generated tokens, $K$ samples cost roughly $K T$ tokens but can be run concurrently if serving capacity is available. This makes it attractive for offline evaluation and high-value tasks, but expensive for low-latency products. Recent test-time scaling work reframes this as an allocation problem: spend extra samples, revisions, or search only when the expected improvement justifies the latency and cost \cite{snell2024scaling,muennighoff2025s1}.
+
+\subsection{Decomposition and Programmed Reasoning}
+Reasoning prompts often decompose a problem into subproblems:
+\[
+    x \rightarrow (x_1,\ldots,x_m) \rightarrow (a_1,\ldots,a_m) \rightarrow a.
+\]
+The decomposition can be natural language, a table, code, a set of equations, or calls to tools. Program-of-thought approaches ask the model to write executable code for arithmetic or symbolic manipulation, shifting part of the burden from language generation to an interpreter. Tool-using agents extend the same idea by calling search, calculators, theorem provers, databases, or code runners.
+
+Decomposition is valuable only when subproblem boundaries are reliable. If the first step frames the problem incorrectly, later steps may make the wrong plan look rigorous. Systems should therefore include opportunities to revise decompositions, not merely solve them.
+
+\section{Search and Verification}
+\subsection{Sample-and-Rank}
+A verifier $v_\psi(x,z,a)$ scores candidate solutions. The system samples $K$ candidates and returns the answer from the highest-scoring candidate:
+\[
+    (\hat{z},\hat{a})
+    =
+    \arg\max_{(z_k,a_k)}
+    v_\psi(x,z_k,a_k).
+\]
+The verifier may be a trained reward model, a process reward model, a unit-test runner, a symbolic checker, or another LLM judge. Verifier-based selection is effective when the verifier is more reliable than the generator on the target error modes. It is dangerous when the verifier shares the generator's blind spots or rewards superficial reasoning markers.
+
+For code, mathematics, and structured outputs, verifiers can be strong because correctness is partially executable: tests pass, equations simplify, schemas validate, or proofs check. For open-ended analysis, the verifier often becomes another preference model and inherits the limitations from Chapter~\ref{ch:preference-learning-alignment}.
+
+\subsection{Outcome Versus Process Supervision}
+Outcome supervision labels only the final answer. Process supervision labels intermediate steps. In math, a process reward model (PRM) estimates whether each step is locally valid \cite{lightman2023lets}. If a trace has steps $s_1,\ldots,s_n$, a PRM provides scores
+\[
+    p_i = P(s_i \text{ is valid} \mid x,s_{<i},s_i).
+\]
+The trace score can then combine step scores, for example by summing log probabilities:
+\[
+    S(z) = \sum_{i=1}^{n} \log p_i.
+\]
+Process supervision can catch early mistakes that lead to a lucky final answer, and it can guide search by pruning bad partial solutions. Its cost is annotation complexity. Step-level labels require expertise, clear definitions of validity, and careful handling of alternative solution paths.
+
+\subsection{Tree Search}
+Tree-of-thought methods generalize sampling by expanding partial reasoning states \cite{yao2023tree}. A node is a partial solution $s$. Expansion samples candidate next thoughts. Evaluation scores partial states. Search then chooses which nodes to expand next. Breadth-first search, beam search, depth-first search with backtracking, and Monte Carlo tree search (MCTS) are different policies for allocating the expansion budget.
+
+A generic tree-search loop is:
+\begin{enumerate}
+    \item Start with root state $s_0=x$.
+    \item Select a frontier node according to a search policy.
+    \item Expand it by sampling $b$ candidate next steps from the model.
+    \item Score candidates with a value function, verifier, or heuristic.
+    \item Stop when a candidate answer passes the acceptance criterion or the budget is exhausted.
+\end{enumerate}
+The key design choice is not whether the structure is called a tree. It is whether the score used to guide expansion is valid. A weak heuristic can make tree search more expensive than self-consistency without improving correctness.
+
+\section{Reinforcement Learning with Verifiable Rewards}
+\subsection{Verifiable Rewards}
+Reinforcement learning with verifiable rewards (RLVR) trains a policy on tasks where correctness can be checked automatically. Examples include math problems with exact answers, programming tasks with tests, theorem-proving goals with proof checkers, and structured extraction tasks with known labels. The reward can be as simple as
+\[
+    R(x,y)
+    =
+    \begin{cases}
+    1, & \text{if verifier accepts } y,\\
+    0, & \text{otherwise.}
+    \end{cases}
+\]
+The attraction is scale: no human preference label is needed for each rollout. The risk is narrowness: the reward covers what can be verified, not necessarily what matters. A code solution can pass visible tests while being brittle; a math answer can be right for the wrong reason; a model can learn formatting tricks that exploit the verifier.
+
+DeepSeek-R1 showed that large-scale RL on verifiable tasks can elicit strong reasoning behavior, including long traces, self-checking, and backtracking, without starting from human-written reasoning demonstrations in the R1-Zero stage \cite{deepseek2025r1}. Subsequent RLVR studies examine when such rewards incentivize correct reasoning rather than merely correct answers \cite{wen2025rlvr}. The answer depends on task design, verifier strength, exploration, and whether shortcuts are available.
+
+\subsection{Group Relative Policy Optimization}
+GRPO-style objectives replace a learned value function with group-relative baselines. For a prompt $x$, sample a group of $G$ responses $\{y_i\}_{i=1}^{G}$ and compute rewards $r_i$. A normalized group advantage is
+\[
+    \hat{A}_i
+    =
+    \frac{r_i-\mathrm{mean}(r_1,\ldots,r_G)}
+         {\mathrm{std}(r_1,\ldots,r_G)+\delta}.
+\]
+The policy update then increases the likelihood of above-average samples and decreases the likelihood of below-average samples, usually with clipping and KL regularization against a reference policy. Removing the value model reduces memory and training complexity, but group sampling increases rollout cost. The method is most natural when rewards are cheap to compute and many samples can be generated per prompt.
+
+A simplified clipped objective for a response $y_i=(a_{i,1},\ldots,a_{i,T_i})$ is
+\begin{align*}
+    \mathcal{J}_{\mathrm{GRPO}}(\theta)
+    &=
+    \frac{1}{G}\sum_{i=1}^{G}
+    \frac{1}{T_i}\sum_{t=1}^{T_i}
+    \min\!\left(
+      \rho_{i,t}(\theta)\hat{A}_i,\,
+      \mathrm{clip}(\rho_{i,t}(\theta),1-\epsilon_{\mathrm{clip}},
+      1+\epsilon_{\mathrm{clip}})\hat{A}_i
+    \right) \\
+    &\quad
+    -
+    \beta D_{\mathrm{KL}}\!\left(
+      \pi_\theta(\cdot|x)\,\|\,\pi_{\mathrm{ref}}(\cdot|x)
+    \right).
+\end{align*}
+Here
+\[
+    \rho_{i,t}(\theta)
+    =
+    \frac{\pi_\theta(a_{i,t}|x,a_{i,<t})}
+         {\pi_{\theta_{\mathrm{old}}}(a_{i,t}|x,a_{i,<t})}.
+\]
+Real implementations differ in token averaging, KL approximation, reward normalization, and whether the reward is attached only to the final answer or to intermediate verified steps. The important distinction from PPO is that the baseline is computed from the sampled group rather than from a learned critic. This makes memory use simpler, but it also makes optimization sensitive to group diversity: if all samples are equally bad, the relative advantages can still push the model toward the least bad local pattern.
+
+GRPO and related methods also change the data distribution seen during training. The model learns from its own sampled attempts, not only from human-written solutions. This is powerful for exploration, but it amplifies verifier errors. If the verifier accepts a flawed shortcut, group-relative optimization can rapidly teach that shortcut.
+
+\section{Inference-Time Scaling}
+\subsection{Compute Shapes}
+Test-time compute can be scaled in several shapes:
+\begin{description}
+    \item[Sequential.] Generate a longer trace, revise, reflect, or continue thinking.
+    \item[Parallel.] Generate multiple independent attempts and vote or rank them.
+    \item[Tree-structured.] Explore branches and allocate more budget to promising partial states.
+    \item[Tool-augmented.] Spend compute on retrieval, code execution, search, or external solvers.
+\end{description}
+If a prompt has prefill cost $C_p$, each generated token has decode cost $C_d$, and a strategy generates $K$ samples of average length $L$, a crude serving cost is
+\[
+    C_{\mathrm{serve}}
+    \approx
+    C_p + K L C_d + C_{\mathrm{verify}} + C_{\mathrm{tools}}.
+\]
+This equation hides batching, KV-cache memory, parallelism, and hardware utilization, but it makes the product tradeoff explicit. A reasoning strategy that improves accuracy by two points may be unacceptable if it multiplies latency by ten for all requests. Adaptive policies attempt to spend more compute only on hard prompts.
+
+\subsection{Budget Forcing}
+Budget forcing controls the amount of reasoning by encouraging the model to continue or stop at chosen points. The s1 work demonstrated that simple test-time scaling and budget forcing can improve a distilled reasoning model on competition math tasks \cite{muennighoff2025s1}. The broader lesson is that inference-time behavior is a controllable interface: max tokens, stop conditions, prompts, verifier thresholds, and sampling parameters all shape the reasoning process.
+
+Budget controls should be evaluated for both accuracy and failure mode. Forcing longer reasoning can help on multi-step math but hurt on perception-grounded multimodal tasks, factual questions where the model lacks knowledge, or tasks where the first correct answer is later revised into an error. More thinking is useful only when the additional computation has access to a corrective signal.
+
+\subsection{Compute-Optimal Allocation}
+Test-time scaling work shows that the best allocation depends on the model and prompt \cite{snell2024scaling,chen2025reasoning,yang2025testtime}. Easy prompts may need one short answer. Medium prompts may benefit from a few samples. Hard prompts may require search, tools, or a larger model. Impossible prompts should trigger abstention rather than unbounded reasoning.
+
+A practical router can estimate difficulty and choose among strategies:
+\[
+    \pi_{\mathrm{route}}(x)
+    \in
+    \{\text{direct},\text{CoT},\text{self-consistency},\text{tool},\text{human}\}.
+\]
+The router itself must be evaluated. If it sends too many prompts to expensive reasoning, cost explodes. If it misses hard prompts, accuracy suffers. If it routes safety-sensitive prompts to long free-form reasoning without strong policy constraints, risk increases.
+
+\section{Frontier Reasoning Systems}
+Frontier reasoning models released in 2024 and 2025 made test-time compute a first-class product feature. Public system cards for OpenAI reasoning models describe safety evaluations, tool use, and risk assessments for models that reason longer before answering \cite{openai2025o3o4mini}. Open-weight reports such as DeepSeek-R1 and Qwen3 document pipelines that combine supervised data, RL, verifiable rewards, distillation, and inference-time controls \cite{deepseek2025r1,yang2025qwen3}.
+
+These reports should be read as engineering evidence, not as final scientific explanations. They show that reasoning performance can be improved by post-training and inference-time computation. They do not prove that visible chains are faithful, that reward-trained reasoning generalizes outside verifiable domains, or that benchmark gains imply robust planning in the real world.
+
+\section{Evaluation Cautions}
+\subsection{Answer Accuracy Is Not Enough}
+A reasoning evaluation should specify:
+\begin{itemize}
+    \item answer metric: exact match, unit tests, proof check, human rubric, or preference;
+    \item trace policy: hidden, visible, summarized, or unavailable;
+    \item compute budget: max tokens, number of samples, tool budget, and wall-clock limit;
+    \item selection method: greedy, majority vote, verifier rank, or human choice;
+    \item contamination controls: held-out questions, transformed variants, and private tests;
+    \item cost metric: tokens, latency, dollars, energy, or hardware occupancy.
+\end{itemize}
+Reporting only accuracy hides the central tradeoff. A model that solves 5\% more tasks with 20 times more generated tokens may be valuable for theorem proving and unacceptable for customer support.
+
+\subsection{Trace Faithfulness}
+Visible reasoning traces are tempting evaluation artifacts. They let graders inspect steps, train process reward models, and debug failures. But a trace can be optimized for the grader. If the final answer is produced by internal activations and the visible trace is generated for presentation, then step-level natural-language evaluation may overstate reliability. Conversely, hiding all traces makes debugging and accountability harder. Many products therefore expose concise rationales or cited calculations, not raw chain-of-thought.
+
+\subsection{Reasoning Boundary Tests}
+Reasoning benchmarks should include boundary cases:
+\begin{itemize}
+    \item problems with insufficient information, where abstention is correct;
+    \item adversarially phrased easy problems, where overthinking causes errors;
+    \item tasks requiring external knowledge not in the prompt;
+    \item tasks with misleading but irrelevant details;
+    \item tasks where a tool result contradicts the model's prior belief;
+    \item safety-sensitive tasks where the correct behavior is refusal or redirection.
+\end{itemize}
+These cases distinguish useful deliberation from verbose pattern completion.
+
+\section{Implementation Notes}
+A robust test-time reasoning stack usually contains five layers:
+\begin{enumerate}
+    \item A prompt or policy that defines whether scratch work is private, visible, or summarized.
+    \item A budget controller for max tokens, number of samples, branch factor, and tool calls.
+    \item A verifier or acceptance test where the domain allows it.
+    \item A router that escalates hard, risky, or low-confidence requests.
+    \item Telemetry that logs budget, latency, selected strategy, verifier result, and user-visible answer.
+\end{enumerate}
+For software engineering tasks, the verifier may be tests and static analysis. For math, it may be exact answer checking or symbolic verification. For factual tasks, retrieval and citation checks are often more valuable than longer unaided reasoning. For safety-sensitive tasks, policy checks should run outside the model's own free-form scratchpad.
+
+\section{Key Terms}
+\begin{description}
+    \item[Chain of thought.] Generated intermediate reasoning tokens used to support a final answer.
+    \item[Self-consistency.] Sampling multiple reasoning traces and aggregating final answers.
+    \item[Verifier.] A model, program, or human process that scores or checks candidate solutions.
+    \item[Process reward model.] A verifier that scores intermediate reasoning steps.
+    \item[Tree search.] A method that expands and evaluates partial reasoning states.
+    \item[RLVR.] Reinforcement learning with rewards from automatic verifiers.
+    \item[GRPO.] A group-relative policy optimization style that uses sampled group rewards as a baseline.
+    \item[Test-time scaling.] Improving performance by spending more computation during inference.
+    \item[Budget forcing.] Controlling the amount of reasoning computation by prompting or decoding constraints.
+\end{description}
+
+\section{Exercises}
+\begin{enumerate}
+    \item Run a small math benchmark with greedy answers, CoT, and self-consistency with $K=5$. Report accuracy, average output tokens, and latency.
+    \item Implement answer normalization for self-consistency on arithmetic problems. Measure how many apparent disagreements are only formatting differences.
+    \item Build a sample-and-rank loop using a unit-test verifier for simple programming tasks. Compare best-of-$K$ selection to majority vote.
+    \item Create five problems where longer reasoning helps and five where it hurts. Explain the difference in terms of available corrective signals.
+    \item Derive the group-relative advantage for a batch of four sampled rewards. Show what happens when all rewards are equal.
+    \item Design an evaluation card for a reasoning model that reports accuracy, token budget, verifier type, hidden/visible trace policy, and contamination controls.
+\end{enumerate}

@@ -1,12 +1,23 @@
 \chapter*{Glossary}
 \addcontentsline{toc}{chapter}{Glossary}
 
-\begin{description}[Context window]
-\item[Attention] A content-dependent mixing operation that forms query, key, and value representations and aggregates values according to query-key compatibility.
-\item[Context window] The maximum number of tokens a model can condition on during a forward pass.
-\item[Instruction tuning] Fine-tuning a pretrained model on examples that pair user-like instructions with target responses.
-\item[KV cache] Stored key and value tensors from previous decoding steps, reused to avoid recomputing attention over the prefix.
-\item[Preference model] A model or implicit objective that represents which of two candidate responses should be preferred under a target policy or annotation protocol.
-\item[Retrieval-augmented generation] A generation pattern in which external documents are retrieved and inserted into the model context before or during answer generation.
-\item[Test-time compute] Additional computation spent at inference time through longer reasoning traces, multiple samples, verification, search, or refinement.
+\begin{description}[Grouped-query attention]
+\item[Attention]\index{attention} A content-dependent mixing operation that forms query, key, and value representations and aggregates values according to query-key compatibility.
+\item[Benchmark contamination]\index{benchmark contamination} Exposure of benchmark items, answers, or close variants during training, tuning, prompt development, or evaluation harness construction.
+\item[Context window]\index{context window} The maximum number of tokens a model can condition on during a forward pass.
+\item[Direct preference optimization]\index{Direct preference optimization} A preference-learning objective that fits a policy from chosen/rejected response pairs without training a separate online reward model.
+\item[Grouped-query attention]\index{grouped-query attention} Attention in which several query heads share each key-value head, reducing KV-cache memory relative to full multi-head attention.
+\item[Instruction tuning]\index{instruction tuning} Fine-tuning a pretrained model on examples that pair user-like instructions with target responses.
+\item[KV cache]\index{KV cache} Stored key and value tensors from previous decoding steps, reused to avoid recomputing attention over the prefix.
+\item[Mixture of experts]\index{mixture of experts} A sparse architecture in which a router sends each token to a subset of expert networks, separating total parameters from active parameters.
+\item[Parameter-efficient adaptation]\index{parameter-efficient adaptation} Fine-tuning methods that update a small set of parameters or adapters while leaving most base-model weights frozen.
+\item[Preference model]\index{preference model} A model or implicit objective that represents which of two candidate responses should be preferred under a target policy or annotation protocol.
+\item[Retrieval-augmented generation]\index{retrieval-augmented generation} A generation pattern in which external documents are retrieved and inserted into the model context before or during answer generation.
+\item[RLHF]\index{RLHF} Reinforcement learning from human feedback, usually involving preference data, reward modeling, and policy optimization under a reference-model constraint.
+\item[RLVR]\index{RLVR} Reinforcement learning with verifiable rewards, where correctness can be checked by an answer key, execution, proof checker, or task-specific verifier.
+\item[RoPE]\index{RoPE} Rotary position embeddings, which inject position by rotating query and key coordinates before attention scores are computed.
+\item[State-space model]\index{state-space model} A sequence model family that updates a compact state across positions, often used to reduce long-context cost relative to full attention.
+\item[Synthetic data]\index{synthetic data} Training data generated or transformed by models or programs, often filtered by validators, reward models, or human audits.
+\item[Test-time compute]\index{test-time compute} Additional computation spent at inference time through longer reasoning traces, multiple samples, verification, search, or refinement.
+\item[Tool use]\index{tool use} A system pattern in which a model selects and conditions on external operations such as retrieval, code execution, calculators, browsers, or database queries.
 \end{description}

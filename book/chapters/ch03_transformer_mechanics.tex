@@ -1,23 +1,177 @@
 \chapter{Transformer Mechanics}
 \label{ch:transformer-mechanics}
 
-\abstract{This chapter derives the \transformer from tensor shapes. It explains attention, masking, residual streams, normalization, feed-forward layers, positional information, and the implementation invariants needed to debug a model from first principles.}
+\abstract{This chapter derives the \transformer from tensor shapes. It explains attention, masking, residual streams, normalization, feed-forward layers, positional information, and the implementation invariants needed to debug a model from first principles. The goal is not to memorize a diagram, but to understand the contracts that make deep attention stacks trainable and implementable.}
 
-\section{Chapter Spine}
-The \transformer is a sequence-to-sequence computation graph whose core operation is content-dependent mixing. The reader should leave this chapter able to predict every major tensor shape in a forward pass and to explain why masking, normalization, and residual connections are necessary.
+\section{The Tensor Contract}
+\label{sec:transformer-tensor-contract}
 
-\section{Core Sections}
-\subsection{Embedding and Positional Information}
-Token embeddings, learned and sinusoidal positions, rotary embeddings, and where position enters attention.
+A \transformer layer is a map from a sequence of hidden vectors to another sequence of hidden vectors. Let a batch of token ids have shape $B \times T$, where $B$ is batch size and $T$ is sequence length. An embedding table maps ids into vectors of width $d_{\mathrm{model}}$, producing
+\begin{equation}
+  X \in \mathbb{R}^{B \times T \times d_{\mathrm{model}}}.
+\end{equation}
+Every standard \transformer block preserves this outer shape. Attention mixes information across the $T$ positions, and the feed-forward network transforms each position independently, but the residual stream remains $B \times T \times d_{\mathrm{model}}$ from the first block to the final normalization.
 
-\subsection{Scaled Dot-Product Attention}
-Queries, keys, values, attention scores, softmax, dropout, and numerical stability.
+The original \transformer combined self-attention, feed-forward sublayers, residual connections, and layer normalization into an architecture that parallelizes over sequence positions far more effectively than recurrent networks \cite{vaswani2017attention}.\index{Transformer}\index{self-attention}\index{residual stream} Modern language models adjust many details, but they keep the same central invariant: the model maintains a residual stream and repeatedly applies content-dependent mixing followed by tokenwise nonlinear transformation.
 
-\subsection{Masks and Causality}
-Padding masks, causal masks, attention bias, and encoder-decoder cross-attention.
+\begin{figure}[t]
+\fbox{\begin{minipage}{0.92\textwidth}
+\centering
+tokens $\rightarrow$ embeddings and positions $\rightarrow$
+[norm $\rightarrow$ attention $\rightarrow$ residual $\rightarrow$ norm $\rightarrow$ MLP $\rightarrow$ residual] $\times L$
+$\rightarrow$ logits or task head
+\end{minipage}}
+\caption{A shape-preserving view of the \transformer block. The attention sublayer changes which positions can exchange information; the MLP changes each position's representation; residual addition keeps a stable path through depth.}
+\label{fig:transformer-shape-preserving}
+\end{figure}
 
-\subsection{Residual Streams and Feed-Forward Blocks}
-Layer normalization, pre-norm versus post-norm, MLP expansion, gated activations, and residual information flow.
+\section{Embeddings and Position}
+\label{sec:embeddings-position}
 
-\section{Planned Exercises}
-Implement single-head attention, multi-head attention, and a masked decoder block with shape assertions at every step.
+Token embeddings supply content but not order. If two sequences contain the same token ids in a different order, a permutation-invariant attention layer without position information cannot distinguish them. Position must enter the computation somehow. There are three broad choices.
+
+Learned absolute position embeddings add a trainable vector $P_t$ to each token embedding:
+\begin{equation}
+  X_{b,t} = E[x_{b,t}] + P_t.
+\end{equation}
+This is simple and was used in GPT-style models, but it fixes a maximum trained context length and gives no built-in rule for unseen positions. Sinusoidal encodings use deterministic sine and cosine functions at multiple frequencies, allowing extrapolation in principle and giving attention a smooth position signal \cite{vaswani2017attention}. Rotary position embeddings (RoPE) instead rotate query and key coordinates by a position-dependent angle before the dot product, so relative offsets influence attention scores directly \cite{su2021roformer}.
+
+Position can also enter as an attention bias. ALiBi, for example, adds a head-specific linear penalty as a function of distance, encouraging recency and enabling some train-short, test-long behavior \cite{press2021train}. Bias methods do not require adding position vectors to the residual stream, but they alter the attention score matrix and therefore interact directly with masking and numerical stability.
+
+\paragraph{Implementation note.}
+Position ids are not always the same as array indices. Packed sequences, left padding, cached decoding, and sliding-window generation can all make the logical position differ from the tensor column. A robust implementation treats position ids as an explicit tensor or constructs them from a well-tested cache update rule.
+
+\section{Scaled Dot-Product Attention}
+\label{sec:scaled-dot-product-attention}
+
+Self-attention creates three projections of the same residual stream:
+\begin{equation}
+  Q = XW_Q,\qquad K = XW_K,\qquad V = XW_V.
+\end{equation}
+For a single head with head dimension $d_h$, the attention output is
+\begin{equation}
+  \mathrm{Attn}(Q,K,V)
+  = \mathrm{softmax}\left(\frac{QK^{\top}}{\sqrt{d_h}} + M\right)V,
+  \label{eq:scaled-dot-product-attention}
+\end{equation}
+where $M$ is an additive mask or bias broadcastable to the score matrix. The scale factor $\sqrt{d_h}$ keeps dot products in a numerically useful range as the head dimension grows. Without it, the softmax can become overly sharp early in training, reducing gradient signal.
+
+In batched multi-head attention, the projections are reshaped into
+\begin{equation}
+  Q,K,V \in \mathbb{R}^{B \times H \times T \times d_h},
+\end{equation}
+where $H d_h = d_{\mathrm{model}}$. The score tensor has shape $B \times H \times T_q \times T_k$. After softmax and multiplication by $V$, the head outputs are transposed and concatenated back to $B \times T \times d_{\mathrm{model}}$, then multiplied by an output projection. Multi-head attention is not merely parallel copies of the same computation. Each head has its own learned projections and therefore its own similarity space, value space, mask view, and often its own positional bias.
+
+The computational cost of exact full attention is dominated by the score and value products:
+\begin{equation}
+  O(BHT^2d_h) = O(BT^2d_{\mathrm{model}}).
+\end{equation}
+The memory footprint of materialized attention weights is $O(BHT^2)$. This quadratic term is why context length is a systems decision, not just a modeling hyperparameter.
+
+\paragraph{Numerical stability.}
+The softmax in Eq.~\ref{eq:scaled-dot-product-attention} should be computed after subtracting the row maximum, and masked positions should be represented by a sufficiently negative additive value before softmax. In mixed precision, many implementations compute score reductions in a higher precision than the stored activations. A model can appear to have an architecture bug when the real problem is overflow, underflow, or a mask with the wrong dtype.
+
+\section{Masks and Causality}
+\label{sec:masks-causality}
+
+Masks specify which positions may exchange information. A padding mask prevents real tokens from attending to padded tokens. A causal mask prevents position $t$ from attending to positions $>t$. Encoder-decoder cross-attention uses a different pattern: decoder positions attend to all allowed encoder positions, while decoder self-attention remains causal.
+
+The common causal mask is lower triangular:
+\begin{equation}
+  M_{ij} =
+  \begin{cases}
+  0, & j \leq i,\\
+  -\infty, & j > i.
+  \end{cases}
+\end{equation}
+The sign convention matters. An additive mask uses $-\infty$ for disallowed positions; a multiplicative boolean mask may use \texttt{True} for allowed positions or for blocked positions depending on the library. Confusing these conventions can train a model that sees the future, attends only to padding, or produces all-\texttt{nan} attention rows.
+
+In decoder-only language models, causality is part of the statistical objective. If token $x_t$ can attend to $x_{t+1}$ during training, the model can reduce loss by copying information that will not exist at inference time. This creates a false loss curve and poor generation. Causal masking is therefore not an optional implementation detail; it is the mechanism that makes teacher-forced next-token training match autoregressive decoding.
+
+\section{Residual Streams and Normalization}
+\label{sec:residual-streams-normalization}
+
+Deep \transformers are trainable because each block modifies a residual stream rather than replacing it. In a pre-normalized decoder block,
+\begin{align}
+  Y &= X + \mathrm{Attention}(\mathrm{Norm}_1(X)),\\
+  Z &= Y + \mathrm{MLP}(\mathrm{Norm}_2(Y)).
+\end{align}
+The residual path gives gradients a direct route through depth, while normalization controls the scale of the inputs to attention and MLP sublayers. Post-normalized blocks instead apply normalization after residual addition. Post-norm was used in the original \transformer, but pre-norm variants are often easier to optimize at substantial depth because the sublayer input distribution is more controlled.
+
+Layer normalization centers and rescales a vector using its mean and variance. For hidden vector $h\in\mathbb{R}^{d}$,
+\begin{equation}
+  \mathrm{LayerNorm}(h)_i =
+  \gamma_i \frac{h_i-\mu}{\sqrt{\sigma^2+\epsilon}} + \beta_i.
+\end{equation}
+RMSNorm removes the mean-centering step and rescales by the root mean square \cite{zhang2019root}:
+\begin{equation}
+  \mathrm{RMSNorm}(h)_i =
+  g_i \frac{h_i}{\sqrt{\frac{1}{d}\sum_{j=1}^{d}h_j^2+\epsilon}}.
+\end{equation}
+The difference is small in notation but significant in implementation: RMSNorm uses fewer reductions and has become a common default in LLaMA-class decoders.
+
+Normalization does not make scale irrelevant. Residual branches, initialization, optimizer settings, activation functions, and precision still determine whether activations remain in a useful range. A useful debugging habit is to log activation norms per layer during early training. Sudden layer-local norm explosions often reveal a mask, initialization, learning-rate, or mixed-precision error before the loss becomes unrecoverable.
+
+\section{Feed-Forward Blocks}
+\label{sec:feed-forward-blocks}
+
+The feed-forward sublayer is positionwise: it applies the same MLP to each token independently. The original \transformer uses a two-layer network with a larger hidden width:
+\begin{equation}
+  \mathrm{FFN}(h) = W_2 \phi(W_1 h + b_1) + b_2.
+\end{equation}
+The expansion width is often around $4d_{\mathrm{model}}$ in GPT-style blocks. This sublayer supplies a large fraction of the model's parameters and compute because it is applied at every position in every layer.
+
+Gated variants split the hidden projection into a value branch and a gate branch. A SwiGLU-style layer can be written
+\begin{equation}
+  \mathrm{SwiGLU}(h) =
+  W_o\left(\mathrm{SiLU}(W_g h) \odot W_u h\right),
+\end{equation}
+where $\odot$ denotes elementwise multiplication. GLU variants have been found effective in \transformer feed-forward sublayers \cite{shazeer2020glu}. Modern implementations often shrink the intermediate width relative to the simple $4d$ MLP so the parameter count remains comparable after adding the gate projection.
+
+\section{Debugging Invariants}
+\label{sec:debugging-invariants}
+
+Most \transformer bugs are shape bugs, mask bugs, or convention bugs. Table~\ref{tab:transformer-debugging-invariants} lists invariants that should hold before training at scale. These checks are cheap compared with a wasted run.
+
+\begin{table}[t]
+\caption{Implementation invariants for a \transformer block.}
+\label{tab:transformer-debugging-invariants}
+\small
+\begin{tabular}{@{}p{3.0cm}p{4.5cm}p{4.4cm}@{}}
+\hline\noalign{\smallskip}
+Check & Expected Property & Symptom When Broken \\
+\noalign{\smallskip}\svhline\noalign{\smallskip}
+Residual shape & Every block returns $B \times T \times d_{\mathrm{model}}$ & Later projection shape errors or silent broadcasting \\
+Head split & $d_{\mathrm{model}}$ divisible by number of heads & Incorrect reshape or mixed head dimensions \\
+Causal mask & Token $t$ attends only to positions $\leq t$ & Unrealistically low train loss and bad generation \\
+Padding labels & Padding does not contribute to loss & Model learns to emit padding or loss depends on batch padding \\
+Position ids & Cached and uncached paths use the same logical positions & Prefill works but token-by-token decoding drifts \\
+Softmax rows & Every unmasked query has at least one allowed key & \texttt{nan} probabilities after masking \\
+\noalign{\smallskip}\hline
+\end{tabular}
+\end{table}
+
+Attention weights are useful diagnostics but weak explanations. A head that attends to a token does not prove that the token caused the output, because later layers, value projections, residual paths, and MLPs can transform or erase that information. Evaluation of a \transformer should therefore combine mechanistic inspection with controlled interventions, held-out loss, downstream tasks, and generation behavior.
+
+\section{Key Terms}
+\label{sec:chapter-three-key-terms}
+
+\begin{description}[Scaled dot-product attention]
+\item[Attention head] One learned query-key-value projection subspace inside multi-head attention.
+\item[Causal mask] A mask that prevents a position from attending to future positions.
+\item[Residual stream] The shape-preserving hidden state that passes through all blocks by residual addition.
+\item[RMSNorm] A normalization layer that rescales by root mean square without subtracting the mean.
+\item[Scaled dot-product attention] Attention computed by softmax-normalized query-key dot products divided by $\sqrt{d_h}$.
+\item[Tokenwise MLP] A feed-forward network applied independently to each sequence position.
+\end{description}
+
+\section{Exercises}
+\label{sec:chapter-three-exercises}
+
+\begin{enumerate}
+\item For $B=8$, $T=1024$, $d_{\mathrm{model}}=768$, and $H=12$, write the shapes of $Q$, $K$, $V$, the attention score tensor, the attention output before concatenation, and the final output projection input.
+\item Implement single-head causal attention for a batch tensor and verify with an assertion that changing token $x_{t+1}$ cannot change the output at position $t$.
+\item Compare learned absolute positions, sinusoidal positions, RoPE, and ALiBi. For each, state where position enters the computation and one extrapolation risk.
+\item Derive the number of parameters in a two-layer MLP with expansion ratio 4 and compare it with a gated MLP that uses two input projections of width $m$ and one output projection.
+\item Create a mask convention test for a deep learning library of your choice. Show how a boolean mask and an additive mask represent the same causal pattern.
+\end{enumerate}

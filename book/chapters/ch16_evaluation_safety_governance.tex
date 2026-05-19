@@ -1,23 +1,214 @@
 \chapter{Evaluation, Safety, and Governance}
 \label{ch:evaluation-safety-governance}
 
-\abstract{This chapter closes the book by treating evaluation, safety, deployment governance, provenance, privacy, copyright, benchmark contamination, hallucination, interpretability, model cards, and operational monitoring as part of the LLM engineering discipline.}
+\abstract{This chapter closes the book by treating evaluation, safety, and governance as part of LLM engineering rather than as afterthoughts. It covers benchmark design, benchmark contamination, human evaluation, LLM-as-judge methods, factuality, hallucination, robustness, red teaming, provenance, privacy, copyright, model cards, dataset documentation, system cards, frontier risk frameworks, operational monitoring, incident response, and deployment limits.}
 
-\section{Chapter Spine}
-Evaluation is the only way to know whether a modeling decision helped. Safety and governance are the constraints that determine whether the resulting system should be deployed.
+\section{Evaluation as a Measurement System}
+Evaluation is the feedback loop that tells an engineering team whether a modeling decision helped. Safety and governance define whether the resulting system should be deployed, who is accountable, and what evidence must be collected before and after release. For LLMs, these concerns are inseparable. A model can improve on a public benchmark while becoming less reliable for the actual product. A safety filter can reduce obvious harmful completions while increasing refusal of benign requests. A benchmark can saturate, leak into training data, or reward the wrong behavior.
 
-\section{Core Sections}
-\subsection{Benchmarks and Their Failure Modes}
-Accuracy, pass@k, judge models, contamination, benchmark saturation, and task mismatch.
+This chapter organizes evaluation as a measurement system. A measurement system has a construct, a dataset, a protocol, a metric, an uncertainty estimate, and a decision rule. ``MMLU score'' or ``win rate'' is not enough. The team must know what capability the metric is supposed to measure, where the examples came from, how the model was prompted, whether tools were allowed, how outputs were parsed, and what deployment decision follows from the result.
 
-\subsection{Human Evaluation}
-Rubrics, pairwise preference, annotator disagreement, calibration, and cost.
+\section{Evaluation Design}
+\subsection{From Question to Decision}
+Every evaluation should begin with a decision. Examples:
+\begin{itemize}
+    \item Can this model replace the previous production model for customer support?
+    \item Does a new preference-tuning run improve helpfulness without increasing unsafe compliance?
+    \item Is a reasoning model worth its added latency for code repair?
+    \item Does a RAG system answer from retrieved evidence rather than parametric memory?
+    \item Is the model acceptable for a regulated domain with human oversight?
+\end{itemize}
+The decision determines the metric. A customer-support assistant needs task completion, escalation accuracy, tone, and policy compliance. A code agent needs patch correctness, test pass rate, repository hygiene, and security review. A medical information assistant needs source faithfulness, abstention, and strict scope control.
 
-\subsection{Hallucination and Robustness}
-Factuality, abstention, uncertainty, retrieval faithfulness, adversarial prompts, and distribution shift.
+\subsection{A Measurement Template}
+A useful evaluation card should include:
+\begin{description}
+    \item[Construct.] The behavior being measured, such as factual precision, instruction following, refusal accuracy, or tool-use success.
+    \item[Population.] The users, prompts, languages, domains, and risk classes the evaluation represents.
+    \item[Protocol.] Prompt format, system message, sampling parameters, tool access, context budget, and time limit.
+    \item[Metric.] Exact match, pass@k, rubric score, pairwise win rate, calibration error, cost, or latency.
+    \item[Uncertainty.] Confidence intervals, bootstrap estimates, annotator agreement, and sample size.
+    \item[Decision rule.] The threshold or comparison that determines launch, rollback, escalation, or further testing.
+\end{description}
+This template prevents benchmark results from becoming detached from engineering decisions.
 
-\subsection{Governance}
-Model cards, dataset cards, logging, privacy, copyright, incident response, and high-stakes deployment limits.
+\section{Benchmarks and Failure Modes}
+\subsection{Capability Benchmarks}
+Public benchmarks give shared reference points. MMLU measures broad multiple-choice knowledge across academic subjects \cite{hendrycks2020measuring}. HELM argues for holistic evaluation across scenarios, metrics, and transparency artifacts \cite{liang2022holistic}. GPQA targets graduate-level science questions designed to be difficult even with web access \cite{rein2023gpqa}. SWE-bench evaluates whether models can resolve real GitHub issues in real repositories \cite{jimenez2023swebench}. Humanity's Last Exam and BrowseComp reflect a 2025 shift toward harder, more multimodal, and agentic evaluations at the frontier \cite{phan2025humanity,openai2025browsecomp}.
 
-\section{Planned Exercises}
-Write an evaluation card for a small LLM application, including success metrics, disallowed uses, and known blind spots.
+These benchmarks are useful, but each measures a specific construct. MMLU does not measure conversational helpfulness. GPQA does not measure safe deployment. SWE-bench depends on repository setup, tests, and agent harness design. BrowseComp measures web-browsing research behavior under a particular protocol, not general truthfulness. Benchmark literacy means knowing what a benchmark excludes.
+
+\subsection{pass@k and Selection Effects}
+Code and reasoning benchmarks often report pass@k: the probability that at least one of $k$ generated samples passes. If a single sample has independent success probability $p$, then
+\[
+    \mathrm{pass@}k = 1-(1-p)^k.
+\]
+Independence rarely holds exactly, but the formula shows why pass@k is not the same as single-attempt reliability. A model with low pass@1 can look strong at pass@100 if sampling diversity is high and verification is cheap. For deployed agents, the relevant number may be pass@1 under a latency budget, pass@k with an automated verifier, or pass@k followed by human review.
+
+\subsection{Benchmark Contamination}
+LLMs are trained on large web corpora that may contain benchmark questions, answers, explanations, or near-duplicates. Contamination inflates scores and can make memorization look like reasoning. Surveys and detection methods document how difficult contamination analysis is for modern LLMs \cite{shi2023detecting,xu2024benchmark}. Mitigations include private test sets, canary strings, deduplication against training corpora, transformed variants, time-split datasets, and post-release benchmark refreshes.
+
+Contamination is not binary. A model may have seen the exact question, a paraphrase, a solution manual, a forum discussion, or many similar examples. Evaluation reports should describe the level of contamination control, not simply assert that a benchmark is clean.
+
+\subsection{Benchmark Saturation and Gaming}
+When a benchmark becomes influential, model developers tune for it. Scores rise, but the benchmark may stop distinguishing real deployment quality. Saturated benchmarks are still useful as regression tests: a model that fails easy public tasks has a problem. They are poor launch gates for frontier capability. Harder benchmarks such as GPQA, HLE, and BrowseComp are partly responses to saturation, but they too can become targets.
+
+\section{Human Evaluation}
+\subsection{Rubrics and Pairwise Preference}
+Human evaluation remains necessary when outputs are open-ended, values are contested, or task success is hard to automate. Pairwise preference is often more reliable than scalar scoring, but it needs a rubric. Annotators should know whether to prioritize factuality over style, safety over completeness, or concision over coverage. Ambiguous prompts should allow ties or ``cannot judge'' labels.
+
+Report human evaluation with:
+\begin{itemize}
+    \item number of prompts and comparisons;
+    \item annotator qualifications and calibration process;
+    \item rubric version;
+    \item inter-annotator agreement;
+    \item confidence intervals for win rates;
+    \item examples of disagreements.
+\end{itemize}
+Without these details, a reported 55\% win rate may be meaningful or noise.
+
+\subsection{LLM-as-Judge}
+LLM judges reduce cost and improve iteration speed. MT-Bench, Chatbot Arena, and related work show that strong models can approximate human preferences for many assistant comparisons \cite{zheng2023judging,chiang2024chatbot}. G-Eval and similar methods use structured prompts and rubrics to grade generated text \cite{liu2023geval}. These methods are useful for development, but they are not neutral measurement instruments.
+
+Common judge biases include:
+\begin{description}
+    \item[Position bias.] Preferring the first or second answer because of ordering.
+    \item[Verbosity bias.] Preferring longer answers.
+    \item[Self-preference.] Preferring outputs from the judge's own model family.
+    \item[Style bias.] Rewarding polish over correctness.
+    \item[Policy bias.] Applying the judge model's safety policy rather than the target product policy.
+\end{description}
+Mitigations include answer-order randomization, length controls, judge ensembles, rubric-specific grading, calibration against human labels, and adversarial judge tests. For high-stakes launches, LLM judges should support human evaluation, not replace it.
+
+\section{Factuality, Hallucination, and Robustness}
+\subsection{Truthfulness and Factual Precision}
+Truthfulness is not identical to confidence or fluency. TruthfulQA targets questions where imitation of common misconceptions leads to false answers \cite{lin2021truthfulqa}. FActScore decomposes long-form generations into atomic facts and measures support against a knowledge source \cite{min2023factscore}. HaluEval collects hallucination examples for detection and analysis \cite{li2023halueval}. RAG evaluation frameworks measure context relevance, answer faithfulness, and answer correctness for retrieval-augmented systems \cite{es2023ragas,gan2025rag}.
+
+For a generated answer $A$ decomposed into atomic claims $c_1,\ldots,c_n$, a simple factual precision estimate is
+\[
+    \mathrm{FactPrecision}(A)
+    =
+    \frac{1}{n}
+    \sum_{i=1}^{n}
+    \mathbf{1}\{c_i \text{ is supported by evidence}\}.
+\]
+This metric emphasizes precision, not completeness. A model can be precise by saying very little. Deployment evaluation should pair factual precision with coverage, abstention, and usefulness.
+
+\subsection{Calibration and Abstention}
+Many applications need calibrated uncertainty. A calibrated model's stated confidence should match empirical correctness. If the model says it is 80\% confident on many answers, about 80\% should be correct. Calibration can be measured with reliability diagrams and expected calibration error, but LLM free-form confidence is unstable. Better signals often come from consistency across samples, verifier scores, retrieval support, or domain-specific checks.
+
+Abstention is a behavior, not a failure, when the prompt lacks enough information. Evaluations should include unanswerable and underspecified prompts. Otherwise, models learn that every prompt must produce a confident answer.
+
+\subsection{Robustness}
+Robustness testing changes the input while preserving the intended task. Examples include paraphrases, typos, adversarial suffixes, distractor documents, misleading context, low-resource languages, unusual formatting, and distribution shifts over time. A robust model should not change a factual answer because the prompt uses a different dialect, and it should not follow malicious instructions in retrieved content.
+
+For RAG and tool systems, robustness includes component failures. The retriever may return stale evidence, the tool may time out, a parser may fail, or an API may change. The evaluation harness should inject such failures and verify graceful degradation.
+
+\section{Safety Evaluation}
+\subsection{Policy Taxonomy}
+Safety evaluation starts with a policy taxonomy. A typical taxonomy includes self-harm, violence, weapons, cyber abuse, fraud, privacy invasion, sexual content, hate and harassment, regulated advice, child safety, and illegal activity. Each category needs allowed, disallowed, and borderline examples. The taxonomy must also define how the assistant should respond: refuse, redirect, provide high-level educational context, ask a clarifying question, or escalate.
+
+Safety metrics should separate:
+\begin{itemize}
+    \item unsafe compliance rate on disallowed requests;
+    \item false refusal rate on benign requests;
+    \item quality of safe redirection;
+    \item jailbreak robustness;
+    \item policy consistency across languages and modalities;
+    \item tool-use safety, such as whether the model calls an external tool for a disallowed purpose.
+\end{itemize}
+A single ``safety score'' hides the tradeoff between over-refusal and under-refusal.
+
+\subsection{Red Teaming}
+Red teaming searches for failures, not average-case performance. It should include manual experts, automated prompt mutation, multilingual attacks, role-play, prompt injection, tool-use attacks, long-context attacks, and multimodal attacks. Findings should be converted into regression tests, but the team should expect adversaries to adapt after deployment.
+
+Frontier model system cards increasingly report safety evaluations, external red teaming, and risk-framework decisions. OpenAI's 2025 Preparedness Framework update and o3/o4-mini system card describe tracked risk categories and safeguards for reasoning models \cite{openai2025preparedness,openai2025o3o4mini}. Anthropic's Claude system cards and Responsible Scaling Policy describe capability thresholds and AI Safety Level safeguards \cite{anthropic2025claude4,anthropic2026rspv3}. Such reports are useful evidence, but they should be read with attention to scope, omitted details, and residual uncertainty.
+
+\section{Governance}
+\subsection{Documentation}
+Documentation turns evaluation into an auditable artifact. Model cards describe intended use, limitations, evaluation results, and ethical considerations \cite{mitchell2019model}. Datasheets and data statements document dataset motivation, collection, composition, preprocessing, recommended uses, and risks \cite{gebru2021datasheets,bender2018data}. For LLM systems, these ideas extend to system cards that cover model, tools, retrieval sources, filters, monitoring, and deployment constraints.
+
+A useful LLM system card includes:
+\begin{itemize}
+    \item model version, base model, and post-training summary;
+    \item intended users and prohibited uses;
+    \item data sources at a level compatible with privacy and security constraints;
+    \item benchmark and in-domain evaluation results;
+    \item safety policy version and refusal behavior;
+    \item known limitations and failure modes;
+    \item monitoring, logging, and incident response process.
+\end{itemize}
+
+\subsection{Risk Management Frameworks}
+Governance frameworks provide structure for risk decisions. NIST AI RMF 1.0 organizes AI risk work around govern, map, measure, and manage functions \cite{nist2023airmf}; the NIST Generative AI Profile adapts these ideas to generative AI risks such as hallucination, data privacy, misuse, and information integrity \cite{nist2024genai}. The European Union AI Act creates a risk-based legal framework with obligations for high-risk systems and general-purpose AI models \cite{europeanunion2024aiact}. These frameworks do not replace engineering judgment, but they force teams to document risk ownership, evaluation evidence, and post-deployment controls.
+
+A concrete governance review should map every launch decision to an evaluation card. For example, a customer-support RAG assistant might require at least 95\% retrieval recall on a private escalation set, factual precision above 98\% on cited claims, unsafe-compliance rate below 0.5\% on policy probes, false-refusal rate below 3\% on benign sensitive prompts, and p95 latency below the product threshold. Each number needs an uncertainty interval. For a binary metric with $k$ failures in $n$ examples, a simple standard-error approximation is
+\[
+    \mathrm{SE}
+    =
+    \sqrt{\frac{\hat{p}(1-\hat{p})}{n}},
+    \qquad
+    \hat{p}=k/n,
+\]
+but low failure rates often require exact or bootstrap intervals rather than a normal approximation. A launch gate that ignores uncertainty can approve a model because the sample was too small to expose rare failures.
+
+Operationally, governance also needs an owner and a rollback path. A release record should name the policy version, model version, retrieval index version, tool permissions, logging retention period, review queue, incident severity rubric, rollback trigger, and communication plan. Copyright and privacy review should happen before data enters training or retrieval: if a source cannot be redistributed, revoked, audited, or access-controlled, it should not be silently absorbed into a weight update.
+
+\subsection{Operational Monitoring}
+Pre-deployment evaluation is a snapshot. Deployed systems face changing users, prompts, tools, laws, and adversaries. Monitoring should track:
+\begin{itemize}
+    \item traffic distribution and drift;
+    \item refusal and escalation rates;
+    \item user feedback and complaint categories;
+    \item hallucination reports and citation failures;
+    \item tool-call failures and suspicious tool use;
+    \item latency, cost, and outage rates;
+    \item safety incidents and near misses.
+\end{itemize}
+Monitoring must respect privacy. Logs should minimize sensitive data, enforce retention limits, and restrict access. For high-risk systems, human review workflows and incident response plans should exist before launch.
+
+\subsection{Deployment Limits}
+Some systems should not be deployed even if benchmark scores are high. Reasons include inadequate evaluation coverage, inability to monitor harms, high false-confidence risk, lack of domain oversight, legal restrictions, or severe misuse potential. A launch decision should weigh capability, uncertainty, reversibility, affected population, and available mitigations. ``The model is better than the previous model'' is not by itself a deployment argument.
+
+\section{Evaluation Checklist}
+\begin{table}[t]
+\centering
+\begin{tabular}{p{0.24\textwidth}p{0.31\textwidth}p{0.31\textwidth}}
+\hline
+Area & Question & Evidence \\
+\hline
+Task success & Does the system solve the user problem? & In-domain test set, human task review, tool success logs \\
+Factuality & Are claims supported? & Atomic fact checks, retrieval faithfulness, abstention tests \\
+Safety & Does it refuse the right requests? & Unsafe compliance and false refusal rates by category \\
+Robustness & Does behavior survive perturbation? & Paraphrases, adversarial prompts, drift tests \\
+Cost & Is the method deployable? & Latency, token use, hardware utilization, dollars per task \\
+Governance & Can decisions be audited? & Model card, data documentation, policy version, incident process \\
+\hline
+\end{tabular}
+\caption{A compact checklist for LLM evaluation and deployment review.}
+\label{tab:evaluation-checklist}
+\end{table}
+
+\section{Key Terms}
+\begin{description}
+    \item[Construct.] The underlying capability or behavior an evaluation intends to measure.
+    \item[Benchmark contamination.] Exposure of benchmark items or solutions during training or tuning.
+    \item[pass@k.] Probability that at least one of $k$ generated candidates passes an evaluation.
+    \item[LLM-as-judge.] Use of a language model to score, rank, or critique outputs.
+    \item[Hallucination.] Generated content that is unsupported or false in the relevant context.
+    \item[Calibration.] Agreement between stated confidence and empirical correctness.
+    \item[Red teaming.] Adversarial testing intended to discover failures.
+    \item[Model card.] Structured documentation of model use, evaluation, and limitations.
+    \item[Risk management.] The process of identifying, measuring, mitigating, monitoring, and governing risks.
+\end{description}
+
+\section{Exercises}
+\begin{enumerate}
+    \item Write an evaluation card for a small LLM application. Include construct, population, protocol, metric, uncertainty, and launch threshold.
+    \item For a benchmark of your choice, list three ways contamination could occur and two mitigations that would still work after public release.
+    \item Run a pairwise human evaluation on twenty prompts with two model variants. Compute win rate and a bootstrap confidence interval.
+    \item Design an LLM-as-judge prompt for factual QA. Then list at least five judge biases and how you would test for them.
+    \item Create a safety evaluation matrix with allowed, disallowed, and redirect examples for three policy categories.
+    \item Draft a one-page incident response plan for a deployed chatbot that produces unsafe or defamatory content.
+\end{enumerate}

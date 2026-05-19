@@ -1,23 +1,202 @@
 \chapter{Optimization and Pretraining}
 \label{ch:optimization-pretraining}
 
-\abstract{This chapter links scaling laws to pretraining recipes. It covers objective design, AdamW, learning-rate schedules, warmup, gradient clipping, stability, checkpointing, data order, loss prediction, and compute-optimal planning.}
+\abstract{This chapter connects the mathematical objective of language-model pretraining to the engineering recipe used to make large runs stable. It covers autoregressive loss accounting, AdamW, parameter groups, learning-rate schedules, warmup, gradient clipping, mixed precision, checkpoint recovery, data order, loss prediction, compute-optimal planning, and evaluation cautions.}
 
-\section{Chapter Spine}
-Pretraining is a joint optimization over model size, token budget, data mixture, precision, and hardware throughput. Scaling laws provide planning tools, but they do not remove the need for careful loss monitoring and failure analysis \cite{kaplan2020scaling,hoffmann2022training}.
+\section{The Pretraining Problem}
+\label{sec:pretraining-problem}
 
-\section{Core Sections}
-\subsection{Optimizer Mechanics}
-AdamW, weight decay, gradient clipping, warmup, cosine decay, and parameter groups.
+Pretraining is the stage in which a model learns a broad distribution before any assistant-specific behavior is imposed. For a causal decoder, the training example is a token sequence $x_{1:T}$ and the objective is next-token prediction:
+\begin{equation}
+  \mathcal{L}(\theta)
+  =
+  -\frac{1}{M}
+  \sum_{(b,t)\in \mathcal{M}}
+  \log p_{\theta}(x_{b,t} \mid x_{b,<t}),
+\end{equation}
+where $\mathcal{M}$ is the set of positions that contribute to loss. In simple packed pretraining, $\mathcal{M}$ contains almost every non-padding position. In instruction tuning, many prompt tokens are masked, but base pretraining usually treats the stream itself as the supervision signal. This difference matters: a pretraining loss curve is a measurement of distributional compression over the corpus mixture, not a direct measurement of helpfulness, truthfulness, or safety.
 
-\subsection{Stability at Scale}
-Initialization, normalization, loss spikes, mixed precision, checkpoint recovery, and monitoring.
+The recipe is a coupled choice of architecture, token budget, context length, data mixture, optimizer, precision, hardware layout, and stopping rule. Scaling-law studies made this coupling explicit by showing predictable loss trends with model size, data size, and compute over broad ranges \cite{kaplan2020scaling}. Compute-optimal work then showed that many early large models were too parameter-heavy for the number of tokens they saw, shifting modern practice toward training smaller or similarly sized models on far more data \cite{hoffmann2022training}. Open model reports reinforce the point: LLaMA-class models are not only architectural artifacts; they are also data and optimization artifacts \cite{touvron2023llama,touvron2023llama2,dubey2024llama3}.
 
-\subsection{Compute-Optimal Planning}
-Parameter-token tradeoffs, FLOPs estimates, sequence length, and undertraining.
+A practical pretraining plan begins with a units table. Let $N$ be trainable parameters, $D$ be training tokens, $T$ be sequence length, $B_{\mu}$ be micro-batch size per device, $G$ be the number of gradient-accumulation micro-steps, and $P$ be the data-parallel world size. The global token batch is
+\begin{equation}
+  B_{\mathrm{tok}} = B_{\mu} \, T \, G \, P.
+\end{equation}
+The number of optimizer updates is approximately $D/B_{\mathrm{tok}}$. For dense decoder-only \transformers, a common planning approximation is that training costs about $6ND$ floating-point operations, excluding attention details, embedding/output costs, recomputation, data loading, and system inefficiency. The approximation is useful because it gives the right first-order economics: doubling either parameters or tokens roughly doubles training compute, while increasing context length changes both model-side attention cost and systems-side activation memory.
 
-\subsection{From Historical Claims to Current Practice}
-What older scaling laws explain well, what later model reports changed, and where empirical judgment still dominates.
+\section{Objective Accounting and Data Order}
+\label{sec:objective-data-order}
 
-\section{Planned Exercises}
-Estimate the compute budget for several model-token configurations and compare the resulting memory and throughput constraints.
+The loss is only meaningful when tokenization, masking, and data provenance are controlled. Two models can report the same numerical loss while using different tokenizers, different document separators, different treatment of repeated text, or different validation mixtures. Perplexity is therefore most useful within a fixed experimental family. Across model families, it should be interpreted as a diagnostic rather than as a universal capability score.
+
+Packed sequence training converts documents into fixed-length blocks. This improves accelerator utilization because every position participates in a dense matrix computation. It also creates subtle boundary choices. If document boundaries are ignored, the model may learn unrealistic transitions across unrelated documents. If every document starts with a boundary token, the model receives a distributional signal about resets, but the vocabulary and tokenizer must reserve and consistently use that marker. If samples are packed with loss masking across boundaries, the data loader must keep masks synchronized with token ids after shuffling and distributed partitioning.
+
+Data order is an optimization variable. A uniform shuffle over all tokens is simple, but large corpora are mixtures: web pages, books, code, papers, multilingual text, math, dialogue, and synthetic data. Mixture weights determine both what the model learns and how stable the loss becomes. Code and math can produce different gradient statistics from casual web text; low-quality duplicates can lower training loss while harming downstream robustness; benchmark-like documents can inflate evaluation through contamination \cite{shi2023detecting,xu2024benchmark}. A serious run keeps a manifest of mixture weights, token counts, deduplication policy, filtering policy, and validation splits.
+
+The validation set should be fixed before the run and should be separated by source, not merely by random token slice. Random slices from a large web corpus may share near-duplicate documents with training. A useful validation dashboard reports loss by mixture component: general web, code, math, books, academic text, multilingual buckets, and any domain-specific data. When a global loss spike occurs, per-component losses often reveal whether the problem is optimizer instability, data corruption, a single bad shard, or a distribution shift introduced by a curriculum boundary.
+
+\begin{table}[t]
+\caption{Pretraining bookkeeping that should be fixed before a run starts.}
+\label{tab:pretraining-bookkeeping}
+\small
+\begin{tabular}{@{}p{2.8cm}p{5.0cm}p{4.1cm}@{}}
+\hline\noalign{\smallskip}
+Item & Why It Matters & Failure Mode \\
+\noalign{\smallskip}\svhline\noalign{\smallskip}
+Tokenizer and boundary tokens & Defines the loss units and document transition signal & Perplexity cannot be compared across runs \\
+Loss mask & Specifies which positions train the model & Padding, separators, or prompt tokens accidentally dominate gradients \\
+Mixture weights & Controls the distribution being learned & A global loss hides regressions in code, math, or low-resource languages \\
+Shard order and seed & Determines reproducibility and restart behavior & A resumed run silently repeats or skips data \\
+Validation sources & Separates optimization diagnostics from benchmark claims & Near-duplicate validation makes the run look healthier than it is \\
+Contamination checks & Protects downstream evaluation & Public benchmark text is learned during pretraining \\
+\noalign{\smallskip}\hline
+\end{tabular}
+\end{table}
+
+\section{AdamW and Parameter Groups}
+\label{sec:adamw-parameter-groups}
+
+Most modern \llm pretraining uses AdamW or a close variant. Adam maintains exponential moving averages of first and second moments of the stochastic gradient \cite{kingma2014adam}. For gradient $g_t = \nabla_{\theta}\mathcal{L}_t(\theta_t)$,
+\begin{align}
+  m_t &= \beta_1 m_{t-1} + (1-\beta_1)g_t, \\
+  v_t &= \beta_2 v_{t-1} + (1-\beta_2)g_t^2,
+\end{align}
+with bias-corrected estimates $\hat{m}_t = m_t/(1-\beta_1^t)$ and $\hat{v}_t = v_t/(1-\beta_2^t)$. A simplified AdamW update is
+\begin{equation}
+  \theta_{t+1}
+  =
+  \theta_t
+  - \eta_t
+  \frac{\hat{m}_t}{\sqrt{\hat{v}_t}+\epsilon}
+  - \eta_t \lambda \theta_t,
+\end{equation}
+where $\eta_t$ is the learning rate and $\lambda$ is decoupled weight decay \cite{loshchilov2019decoupled}. The word ``decoupled'' is important. Classical $L_2$ regularization adds $\lambda \theta$ to the gradient, so the adaptive denominator changes the effective regularization. AdamW applies decay as a separate multiplicative shrinkage term, which makes the meaning of weight decay less entangled with gradient scale.
+
+Parameter groups are part of the algorithm, not cosmetic code. Common practice applies weight decay to large weight matrices but excludes biases, normalization parameters, and sometimes embeddings. The reason is structural: a normalization scale or bias does not behave like a high-dimensional weight matrix whose norm should be regularized. A typical implementation builds two groups:
+\begin{equation}
+  \Theta_{\mathrm{decay}} = \{W: \dim(W)\ge 2\}, \qquad
+  \Theta_{\mathrm{nodecay}} = \Theta \setminus \Theta_{\mathrm{decay}}.
+\end{equation}
+The exact rule should be logged, because small changes can affect reproducibility across codebases.
+
+The Adam hyperparameters also encode assumptions about gradient noise. Many \llm recipes use $\beta_1$ near $0.9$ and $\beta_2$ lower than the original Adam default of $0.999$, often around $0.95$ or $0.98$, so the second-moment estimate adapts faster during long runs with changing data mixtures. The $\epsilon$ value is not merely a numerical afterthought in low precision: it affects the denominator when second moments are small. Any comparison of optimizer variants should state $(\beta_1,\beta_2,\epsilon)$, weight decay, clipping rule, schedule, batch size, and precision.
+
+\section{Schedules, Warmup, and Batch Size}
+\label{sec:schedules-warmup-batch}
+
+The learning-rate schedule controls how aggressively the run spends optimization budget. A common schedule warms up linearly, decays with a cosine curve, and ends at a nonzero minimum:
+\begin{equation}
+\eta_t =
+\begin{cases}
+\eta_{\max}\frac{t}{t_w}, & t < t_w,\\
+\eta_{\min} + \frac{1}{2}(\eta_{\max}-\eta_{\min})
+\left(1+\cos\left(\pi \frac{t-t_w}{t_d-t_w}\right)\right), & t_w \le t \le t_d,\\
+\eta_{\min}, & t > t_d.
+\end{cases}
+\end{equation}
+Warmup prevents the first few thousand steps from taking full-size adaptive updates before moment estimates and activation scales have settled. Cosine decay gradually reduces update size without a sharp discontinuity. Some production runs reserve a final annealing phase on a changed mixture, but such phases should be treated as new experiments: changing the data distribution near the end can improve targeted evaluations while obscuring what the base model learned from the main corpus.
+
+Batch size is best measured in tokens, not examples. A batch of eight sequences at context length 8192 contains as many token positions as sixty-four sequences at context length 1024. Larger token batches reduce gradient noise and improve device utilization, but they also reduce the number of optimizer updates for a fixed token budget. Gradient accumulation simulates a larger batch when the micro-batch that fits in memory is small. With data parallelism, the effective batch is the product of micro-batch, sequence length, accumulation steps, and replicas. If that product changes, the learning-rate schedule and warmup should be reconsidered rather than inherited blindly.
+
+A useful diagnostic is the tokens-per-update curve together with loss. If a run changes sequence length, packing efficiency, data-parallel size, or accumulation steps after resumption, the apparent update count no longer corresponds to the same number of tokens. For large runs, logs should use token count as the primary training-time axis and optimizer step as a secondary axis.
+
+\section{Gradient Clipping and Stability}
+\label{sec:clipping-stability}
+
+Large pretraining runs fail in recognizable ways: loss spikes, NaNs, diverging gradient norms, stuck data loaders, corrupted checkpoints, and sudden throughput drops. Gradient clipping is a simple guardrail. Global norm clipping rescales gradients when
+\begin{equation}
+  \|g\|_2 = \sqrt{\sum_i \|g_i\|_2^2}
+\end{equation}
+exceeds a threshold $c$, replacing $g$ with $g \cdot c/(\|g\|_2+\epsilon)$. Clipping does not fix a bad schedule or bad data, but it can keep a rare large batch from destroying the optimizer state. The clipped fraction should be logged; constant clipping means the threshold or learning rate is probably wrong, while rare clipping during outlier batches may be acceptable.
+
+Stability also depends on architecture. Pre-normalization improves gradient flow in deep decoders. RMSNorm, residual scaling, careful initialization, and gated feed-forward layers change activation distributions. Long context increases attention score ranges and KV-cache sizes. Mixture-of-experts models add router logits and load-balancing losses, so a stable dense recipe may not transfer directly to a sparse model \cite{deepseek2024v3}. Optimizer settings should therefore be tied to the architecture version and not recorded as generic ``LLM defaults.''
+
+Mixed precision is a second source of instability. FP16 has limited exponent range, so loss scaling became a standard technique for avoiding gradient underflow \cite{micikevicius2017mixed}. BF16 has fewer mantissa bits but a wider exponent range, which makes it attractive for large \transformer training because it often avoids explicit loss scaling. FP8 and other lower-precision formats can improve throughput but require careful scaling, accumulation, and validation against higher-precision baselines. A publishable training report states which tensors are stored, multiplied, reduced, and accumulated in which precision.
+
+Loss spikes need triage rather than superstition. The first question is whether the spike is local to one worker, one data shard, one mixture component, or the whole job. The second is whether weights, optimizer moments, or both have been corrupted. If only a bad batch caused a transient spike, skipping or clipping may be enough. If optimizer state contains infinities, resuming from a checkpoint before the spike is safer. If the validation loss changes permanently, the run has entered a different region of parameter space and should be treated as a new branch.
+
+\section{Checkpointing and Reproducibility}
+\label{sec:checkpointing-reproducibility}
+
+A checkpoint is more than model weights. For reproducible pretraining it must contain model parameters, optimizer state, scheduler state, random-number generator states, data-loader position, tokenizer identity, configuration, and enough sharding metadata to reconstruct the model. AdamW stores two moment tensors per parameter, so optimizer state can be larger than the weights themselves. Distributed systems may save sharded checkpoints to avoid gathering a full model on one host; the checkpoint format then becomes part of the system contract.
+
+Checkpoint cadence is a cost tradeoff. Frequent checkpoints reduce lost work after failure but consume I/O bandwidth and storage. In a large cluster, writing checkpoints can stall training if all workers flush simultaneously to a shared filesystem. A practical plan staggers writes when possible, keeps a small rolling window of recent recovery checkpoints, and separately exports less frequent archival checkpoints for evaluation. The archival checkpoint should include enough metadata to identify exactly which data and code produced it.
+
+Resumption should be tested before the expensive run. A small dry run should train for a few updates, save, resume, and verify that loss and learning rate continue on the expected trajectory. This catches common errors: forgetting optimizer state, resetting the scheduler, repeating data shards, changing dropout seeds, or loading weights under a slightly different architecture. The dry run is not administrative overhead; it is a systems test of the scientific claim.
+
+\section{Compute-Optimal Planning}
+\label{sec:compute-optimal-planning}
+
+Scaling laws are planning tools, not laws of nature. They are empirical fits over specific architectures, tokenizers, corpora, and training procedures. The useful lesson is not that a single formula determines the next model, but that compute should be allocated deliberately between parameters and tokens. If a model is too large for the available token budget, it may have impressive capacity but underdeveloped weights. If a model is too small for the token budget, extra data may produce diminishing returns because capacity becomes the bottleneck \cite{hoffmann2022training}.
+
+A planning worksheet usually includes:
+\begin{enumerate}
+\item the target model family and parameter count $N$;
+\item the token budget $D$ by mixture component;
+\item the sequence length and expected packing efficiency;
+\item the estimated FLOPs, $6ND$ as a baseline plus attention and overhead adjustments;
+\item expected model FLOPs utilization (MFU) or hardware utilization;
+\item wall-clock time under realistic failure and checkpoint overhead;
+\item validation checkpoints and go/no-go criteria.
+\end{enumerate}
+The worksheet should be updated with measured throughput from a scaled-down run. Small-batch microbenchmarks often overestimate full-run throughput because they omit data loading, checkpointing, network contention, stragglers, validation, and restarts.
+
+Undertraining is a common interpretation trap. A larger model trained on too few tokens can beat a smaller model on some few-shot benchmarks while having worse cost-performance. Conversely, a smaller model trained longer can be easier to serve and adapt. Model reports such as LLaMA, Llama 2, and Llama 3 should be read with this tradeoff in mind: parameter count alone is a poor proxy for training investment or deployment cost \cite{touvron2023llama,touvron2023llama2,dubey2024llama3}.
+
+\begin{table}[t]
+\caption{First-order compute and memory quantities used in pretraining planning. Constants vary by architecture and implementation, so these formulas are planning approximations.}
+\label{tab:pretraining-planning}
+\small
+\begin{tabular}{@{}p{3.2cm}p{3.7cm}p{5.0cm}@{}}
+\hline\noalign{\smallskip}
+Quantity & Approximation & Interpretation \\
+\noalign{\smallskip}\svhline\noalign{\smallskip}
+Training FLOPs & $6ND$ & Dense decoder baseline for forward and backward passes \\
+Token batch & $B_{\mu}TGP$ & Tokens consumed per optimizer update \\
+Optimizer steps & $D/(B_{\mu}TGP)$ & Schedule length should track tokens as well as steps \\
+Parameter memory & $N \times$ bytes per parameter & Weight storage before gradients and optimizer states \\
+Adam state memory & $2N \times$ state bytes & First and second moments dominate training memory \\
+Activation memory & Proportional to layers, $B_{\mu}$, $T$, hidden size & Often the reason for checkpointing or smaller micro-batches \\
+\noalign{\smallskip}\hline
+\end{tabular}
+\end{table}
+
+\section{Monitoring, Evaluation, and Stop Rules}
+\label{sec:monitoring-stop-rules}
+
+Training dashboards should separate optimization health from model quality. Optimization health includes training loss, validation loss by mixture, gradient norm, update norm, learning rate, clipping rate, tokens processed, throughput, memory reserved, data-loader wait time, all-reduce time, checkpoint time, and error counts. Model quality includes held-out tasks, generation samples, code tests, math tests, multilingual probes, safety probes, and contamination-aware benchmark suites. The first set answers ``is the run functioning?'' The second answers ``is the artifact useful?''
+
+Loss prediction can detect problems early. If prior scaling fits or smaller pilot runs predict a smooth loss curve, deviations deserve explanation. A loss above prediction may indicate poor data quality, an overly aggressive learning rate, insufficient warmup, a bug in masking, or lower-than-expected batch quality. A loss below prediction may be good news, but it can also signal validation leakage, duplicate-heavy data, or a tokenizer difference. The direction of surprise is less important than whether the team can explain it.
+
+Stop rules should be written before the run. Examples include a maximum token budget, a target validation loss, a budget cap, or a decision checkpoint where marginal loss improvement no longer justifies cost. Without a stop rule, teams are tempted to continue because the curve still decreases, even when the deployment target would be better served by spending compute on data cleaning, post-training, evaluation, or inference optimization.
+
+\section{Implementation Notes}
+\label{sec:optimization-implementation-notes}
+
+The local implementation exercises that motivate this chapter use a progression from a small \transformer training loop to GPT-style and LLaMA-style pretraining scripts. The textbook lesson is not the literal code but the invariants those scripts expose: zero gradients before backward, scale loss during accumulation, clip after unscaling and before the optimizer step, step the scheduler consistently, save optimizer state, and log tokens per second. In a distributed run, only some workers should perform human-readable logging, but all workers must agree on seeds, data partitions, and checkpoint barriers.
+
+Several bugs are easy to miss in review. If the target tensor is shifted incorrectly, the model may learn to copy the current token rather than predict the next. If padding is not masked, the model can achieve low loss by learning padding statistics. If loss is divided by accumulation steps after the backward pass instead of before, gradient scale changes with accumulation. If validation uses training dropout or an unfrozen data order, the loss becomes noisy for reasons unrelated to generalization. If the final partial accumulation step is mishandled, the last updates of an epoch can have a different effective learning rate.
+
+\section{Key Terms}
+\label{sec:optimization-key-terms}
+
+\begin{description}
+\item[AdamW] Adam with weight decay applied as a separate parameter shrinkage term rather than as an adaptive gradient penalty.
+\item[Gradient accumulation] Multiple forward/backward micro-steps whose gradients are summed before one optimizer step.
+\item[Global norm clipping] Rescaling all gradients together when their combined norm exceeds a threshold.
+\item[MFU] Model FLOPs utilization, the ratio of achieved model-relevant FLOPs to hardware theoretical peak.
+\item[Packed sequence] A fixed-length token block formed by concatenating or slicing documents for efficient training.
+\item[Warmup] An initial schedule phase that increases learning rate gradually while optimizer moments and activations settle.
+\end{description}
+
+\section{Exercises}
+\label{sec:optimization-exercises}
+
+\begin{enumerate}
+\item A model has $N=7$ billion parameters and is trained on $D=1.4$ trillion tokens. Estimate dense training FLOPs with the $6ND$ rule. If the cluster sustains $1.2\times 10^{18}$ FLOPs/s on model work, estimate ideal wall-clock days before checkpointing and failures.
+\item Suppose $B_{\mu}=4$, $T=4096$, $G=16$, and $P=128$. Compute tokens per optimizer update and the number of optimizer updates for $300$ billion tokens. Explain how the answer changes if the context length doubles while the token budget stays fixed.
+\item Write pseudocode for one accumulation cycle using mixed precision, loss scaling if needed, global norm clipping, AdamW, and a cosine schedule. State exactly where gradients are divided by the accumulation factor.
+\item Design a validation dashboard with at least six mixture-specific losses. For each loss, name one data or optimization failure it could reveal before global validation loss does.
+\item A run resumes from checkpoint and immediately reports a lower training loss but a higher validation loss. List four possible causes and the evidence you would inspect for each.
+\item Compare two plans with the same compute budget: a larger model on fewer tokens and a smaller model on more tokens. Describe one deployment scenario where each plan could be the better choice.
+\end{enumerate}
