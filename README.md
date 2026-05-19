@@ -2,7 +2,7 @@
 
 This repository contains the Overleaf-ready LaTeX manuscript for:
 
-**Large Language Models: Foundations, Systems, Alignment, and Applications**
+**Large Language and Generative Foundation Models: Foundations, Systems, Alignment, and Applications**
 
 The main file is:
 

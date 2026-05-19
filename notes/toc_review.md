@@ -16,7 +16,7 @@ The reviewer argued for a tighter 16-chapter structure with five corrections:
 
 ## Converged Structure
 
-The manuscript now uses 16 chapters:
+After the frontier review, the manuscript uses 17 chapters. The additional final chapter is not a topic dump; it is an audit and practice roadmap that keeps the rest of the book tied to current research without fragmenting the core pedagogy.
 
 1. What Makes a Language Model Large
 2. Tokens, Corpora, and Training Signals
@@ -32,5 +32,10 @@ The manuscript now uses 16 chapters:
 12. Retrieval, Tools, and Agents
 13. Preference Learning and Alignment
 14. Reasoning and Test-Time Compute
-15. Multimodal LLMs
+15. Multimodal and Generative Foundation Models
 16. Evaluation, Safety, and Governance
+17. Research Frontiers and Practice Roadmap
+
+## Latest Structure Decision
+
+The current structure remains appropriate for a high-positioned book because it treats modern foundation-model work as one lifecycle: data, objectives, architecture, systems, adaptation, applications, evaluation, and governance. The main correction was to broaden Chapter 15 so the book is not limited to text-only LLMs. Unified understanding-generation models, diffusion/rectified-flow generation, AR-diffusion hybrids, and any-to-any omni interfaces are now covered inside the same chapter rather than split into isolated survey-style chapters.

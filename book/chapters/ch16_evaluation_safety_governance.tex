@@ -1,7 +1,7 @@
 \chapter{Evaluation, Safety, and Governance}
 \label{ch:evaluation-safety-governance}
 
-\abstract{This chapter closes the book by treating evaluation, safety, and governance as part of LLM engineering rather than as afterthoughts. It covers benchmark design, benchmark contamination, human evaluation, LLM-as-judge methods, factuality, hallucination, robustness, red teaming, provenance, privacy, copyright, model cards, dataset documentation, system cards, frontier risk frameworks, operational monitoring, incident response, and deployment limits.}
+\abstract{This chapter closes the book by treating evaluation, safety, and governance as part of LLM engineering rather than as afterthoughts. It covers benchmark design, benchmark contamination, human evaluation, LLM-as-judge methods, long-context and agentic evaluation, multimodal generation evaluation, factuality, hallucination, robustness, red teaming, interpretability, unlearning, watermarking, provenance, privacy, copyright, model cards, dataset documentation, system cards, frontier risk frameworks, operational monitoring, incident response, and deployment limits.}
 
 \section{Evaluation as a Measurement System}
 Evaluation is the feedback loop that tells an engineering team whether a modeling decision helped. Safety and governance define whether the resulting system should be deployed, who is accountable, and what evidence must be collected before and after release. For LLMs, these concerns are inseparable. A model can improve on a public benchmark while becoming less reliable for the actual product. A safety filter can reduce obvious harmful completions while increasing refusal of benign requests. A benchmark can saturate, leak into training data, or reward the wrong behavior.
@@ -52,6 +52,13 @@ Contamination is not binary. A model may have seen the exact question, a paraphr
 
 \subsection{Benchmark Saturation and Gaming}
 When a benchmark becomes influential, model developers tune for it. Scores rise, but the benchmark may stop distinguishing real deployment quality. Saturated benchmarks are still useful as regression tests: a model that fails easy public tasks has a problem. They are poor launch gates for frontier capability. Harder benchmarks such as GPQA, HLE, and BrowseComp are partly responses to saturation, but they too can become targets.
+
+\subsection{Long-Context, Agentic, and Generative Evaluation}
+Frontier systems increasingly fail outside the shape of short-answer benchmarks. Long-context models need tests for effective context use, not only maximum input length. $\infty$Bench, RULER, and LongBench v2 probe retrieval, aggregation, multi-hop reasoning, and realistic long-document understanding at context lengths where naive prompting can look impressive while actual evidence use remains brittle \cite{zhang2024inftybench,hsieh2024ruler,bai2024longbenchv2}. A long-context evaluation should report position sensitivity, distractor robustness, answer support, and cost per successful task.
+
+Agentic evaluations add another layer. SWE-bench tests whether a model or agent can modify real repositories to resolve real issues \cite{jimenez2023swebench}; BrowseComp-style evaluations test difficult web research under a constrained browsing protocol \cite{openai2025browsecomp}. These are not just language tests. They evaluate model, tool runtime, state management, retry policy, sandboxing, and budget. A serious report should separate model capability from harness advantage: which tools were allowed, how many attempts were made, whether tests were visible, whether human hints were used, and how rollbacks were handled.
+
+Generative multimodal systems need still different evidence. A text-to-image or text-to-video model should be evaluated for instruction following, visual fidelity, typography, object relations, temporal consistency, editing locality, diversity, safety filtering, and provenance. Unified understanding-generation systems need cross-task regression checks: improving image generation should not silently degrade OCR, document QA, speech latency, or refusal behavior. Janus-Pro, MMaDA, Sora-style video generation, and AR-Omni illustrate why one average score cannot represent a system that both understands and creates media \cite{chen2025januspro,yang2025mmada,openai2024sora,cheng2026aromni}.
 
 \section{Human Evaluation}
 \subsection{Rubrics and Pairwise Preference}
@@ -155,6 +162,13 @@ but low failure rates often require exact or bootstrap intervals rather than a n
 
 Operationally, governance also needs an owner and a rollback path. A release record should name the policy version, model version, retrieval index version, tool permissions, logging retention period, review queue, incident severity rubric, rollback trigger, and communication plan. Copyright and privacy review should happen before data enters training or retrieval: if a source cannot be redistributed, revoked, audited, or access-controlled, it should not be silently absorbed into a weight update.
 
+\subsection{Interpretability, Unlearning, and Watermarking}
+Governance needs technical levers, but none should be oversold. Mechanistic interpretability tries to identify features, circuits, or causal pathways inside a model. Anthropic's work on monosemantic features and circuit tracing shows that increasingly large models can sometimes be decomposed into interpretable computational structure, but these methods are still partial views rather than complete safety proofs \cite{templeton2024monosemanticity,anthropic2025circuit}. They are most useful when paired with interventions, counterexamples, and downstream behavior tests.
+
+Unlearning addresses a different question: how can a model be made to stop producing or relying on targeted knowledge, private data, copyrighted material, or unsafe capabilities after training? Surveys of LLM unlearning emphasize that removal claims require careful evaluation of retained utility, extraction resistance, relearning risk, and collateral damage \cite{qiu2025unlearning}. A model that stops answering one memorized prompt may still leak the same information through paraphrase, retrieval, or fine-tuning.
+
+Watermarking and provenance tools aim to identify generated content or trace model outputs. Token-level watermarking schemes can bias sampling so generated text carries a detectable statistical signal \cite{kirchenbauer2023watermark}. For multimodal generation, provenance also includes metadata, content credentials, visible labels, model cards, and platform policy. Watermarks can be removed, paraphrased away, or broken by distribution shift, so they should be treated as one evidence layer rather than as a complete solution to misinformation, copyright, or accountability.
+
 \subsection{Operational Monitoring}
 Pre-deployment evaluation is a snapshot. Deployed systems face changing users, prompts, tools, laws, and adversaries. Monitoring should track:
 \begin{itemize}
@@ -199,6 +213,8 @@ Governance & Can decisions be audited? & Model card, data documentation, policy 
     \item[Hallucination.] Generated content that is unsupported or false in the relevant context.
     \item[Calibration.] Agreement between stated confidence and empirical correctness.
     \item[Red teaming.] Adversarial testing intended to discover failures.
+    \item[Unlearning.] A post-training intervention intended to remove or suppress targeted knowledge or behavior while preserving unrelated capability.
+    \item[Watermarking.] A method for embedding or detecting statistical or metadata signals that indicate generated content.
     \item[Model card.] Structured documentation of model use, evaluation, and limitations.
     \item[Risk management.] The process of identifying, measuring, mitigating, monitoring, and governing risks.
 \end{description}
@@ -209,6 +225,8 @@ Governance & Can decisions be audited? & Model card, data documentation, policy 
     \item For a benchmark of your choice, list three ways contamination could occur and two mitigations that would still work after public release.
     \item Run a pairwise human evaluation on twenty prompts with two model variants. Compute win rate and a bootstrap confidence interval.
     \item Design an LLM-as-judge prompt for factual QA. Then list at least five judge biases and how you would test for them.
+    \item Design an evaluation card for a unified text-image model. Include separate metrics for understanding, generation, editing, safety, and provenance.
     \item Create a safety evaluation matrix with allowed, disallowed, and redirect examples for three policy categories.
+    \item Propose an unlearning evaluation for a small memorized corpus. Include extraction prompts, utility regression tests, and relearning checks.
     \item Draft a one-page incident response plan for a deployed chatbot that produces unsafe or defamatory content.
 \end{enumerate}

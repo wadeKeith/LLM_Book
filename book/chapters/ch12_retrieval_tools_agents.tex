@@ -1,7 +1,7 @@
 \chapter{Retrieval, Tools, and Agents}
 \label{ch:retrieval-tools-agents}
 
-\abstract{This chapter covers retrieval-augmented generation, embeddings, vector databases, retrievers, rerankers, chunking, citation faithfulness, tool calls, ReAct-style reasoning-action loops, and agent workflow evaluation.}
+\abstract{This chapter covers retrieval-augmented generation, embeddings, vector databases, retrievers, rerankers, chunking, citation faithfulness, context engineering, typed memory, tool calls, ReAct-style reasoning-action loops, and agent workflow evaluation.}
 
 \section{RAG as a Control System}
 \label{sec:rag-control-system}
@@ -92,6 +92,19 @@ End-to-end judge scores are useful for triage but dangerous as the only metric. 
 
 The right baseline matters. Compare against no retrieval, sparse retrieval, dense retrieval, hybrid retrieval, reranking, and an oracle context where the gold evidence is supplied. The gap between oracle-context generation and retrieved-context generation estimates how much quality is being lost in retrieval and context construction. The gap between oracle-context generation and the gold answer estimates generator limitations.
 
+\section{Context Engineering and Memory}
+\label{sec:context-engineering-memory}
+
+RAG is one form of a broader discipline: context engineering. Context engineering treats the entire information payload supplied to the model as an object of design: system instructions, developer policy, user request, retrieved documents, conversation history, tool outputs, temporary scratchpads, long-term memory, and structured state. Recent surveys argue that this is no longer merely ``prompt engineering''; it is the systematic construction, processing, compression, routing, and governance of context for model behavior \cite{mei2025context}.
+
+This distinction matters because a capable model can still fail when the context contract is wrong. A long prompt can contain the relevant evidence but place it where the model underuses it. A memory system can preserve a user's preference but also preserve outdated or sensitive information. A tool output can be accurate but stale by the time the model acts on it. A context compressor can reduce latency while deleting the uncertainty that should have caused abstention. The design unit is therefore not a prompt string; it is a stateful context pipeline.
+
+Long-context models do not eliminate context engineering. Benchmarks such as $\infty$Bench, RULER, and LongBench v2 show that nominal context length differs from effective context use, especially when tasks require aggregation, multi-hop reasoning, contradiction handling, or realistic long-document understanding \cite{zhang2024inftybench,hsieh2024ruler,bai2024longbenchv2}. A model that accepts 256K or 1M tokens may still fail to bind evidence across sections, retrieve a non-literal fact, or ignore distractors. In many systems, a shorter prompt with better retrieval, chunking, and state management beats a raw long-context dump.
+
+Memory should be typed. A production assistant may store user preferences, task state, conversation summaries, document embeddings, tool observations, and safety-relevant decisions. These should not share one undifferentiated text buffer. Each memory type needs provenance, update rules, expiration, user visibility, deletion semantics, and permission checks. A memory that cannot be inspected or revoked becomes a hidden training set at inference time.
+
+The practical test is simple: if a later answer depends on a piece of context, the system should be able to say where that context came from, why it was allowed into the prompt, whether it was transformed, and how it can be removed or corrected. Without that audit trail, context engineering becomes another source of untraceable model behavior.
+
 \section{Prompt Injection and Trust Boundaries}
 \label{sec:prompt-injection-trust}
 
@@ -151,6 +164,7 @@ Freshness also has a systems cost. Indexes must be rebuilt or incrementally upda
 \item[Hybrid retrieval] Combining dense semantic scores with sparse lexical scores.
 \item[Reranker] A second-stage model or rule that orders retrieved candidates more precisely before context insertion.
 \item[Citation faithfulness] The degree to which cited sources actually support the claims attached to them.
+\item[Context engineering] The design and governance of the full information payload supplied to a model, including retrieval, memory, tools, instructions, and state.
 \item[Prompt injection] An attack in which untrusted text inside context attempts to override higher-priority instructions or exfiltrate data.
 \item[Tool call] A structured action request from the model to an external function, service, or environment.
 \item[Agentic workflow] A bounded loop in which the model selects actions, receives observations, and updates state toward a goal.
@@ -163,6 +177,7 @@ Freshness also has a systems cost. Indexes must be rebuilt or incrementally upda
 \item Build a small RAG benchmark with at least 30 questions and labeled supporting chunks. Report recall@5 before measuring answer quality.
 \item Compare three chunking strategies for the same corpus: short chunks, long chunks, and overlapping chunks. Measure retrieval recall, context precision, and average prompt tokens.
 \item Implement hybrid retrieval using Equation~\ref{eq:hybrid-score}. Sweep $\lambda$ and report which query types prefer dense versus sparse retrieval.
+\item Design a typed memory schema for a personal assistant. Specify which fields are user-visible, which expire automatically, and which require explicit permission before entering context.
 \item Create five prompt-injection documents and add them to a test index. Measure whether the system follows hostile instructions, leaks hidden text, or corrupts citations.
 \item Design a tool schema for read-only SQL querying. Specify argument validation, permission checks, error messages, and how generated SQL will be sandboxed.
 \item Evaluate an agentic workflow on a real task with a fixed budget. Report success rate, tool calls, cost, latency, and the most common failure mode.
