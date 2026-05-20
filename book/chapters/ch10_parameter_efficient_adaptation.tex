@@ -85,8 +85,8 @@ The initialization is part of the method. A typical implementation initializes o
 \draw[llmarrow] (input) -- (base);
 \draw[llmarrow] (input.south east) |- (lora.west);
 \draw[llmarrow] (base) -- (sum);
-\draw[llmarrow] (lora.east) -| (sum.south);
-\draw[llmdash] (lora) -- (ops);
+\draw[llmarrow] (lora.east) -- ++(0.35cm,0) |- (sum.south);
+\draw[llmdash] (lora.south east) -- (ops.south west);
 \end{tikzpicture}
 \caption{LoRA adds a trainable low-rank residual to selected frozen matrices. The same learned update has different operational consequences depending on whether it is kept as an adapter or merged into the base weight.}
 \label{fig:lora-low-rank-path}

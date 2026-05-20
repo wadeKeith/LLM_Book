@@ -837,8 +837,8 @@ LoRA 的 rank、alpha、dropout 和 target modules 都是建模选择。只调 q
 \draw[llmarrow] (h) -- (base);
 \draw[llmarrow] (h.south east) |- (lora.west);
 \draw[llmarrow] (base) -- (out);
-\draw[llmarrow] (lora.east) -| (out.south);
-\draw[llmdash] (lora) -- (ops);
+\draw[llmarrow] (lora.east) -- ++(0.35cm,0) |- (out.south);
+\draw[llmdash] (lora.south east) -- (ops.south west);
 \end{tikzpicture}
 }
 \caption{LoRA 在冻结矩阵旁增加低秩残差路径。训练省参数不等于部署无代价，adapter 管理、合并策略和回归测试仍然是发布对象。}
@@ -1699,7 +1699,7 @@ CS336 的价值在于强调从零实现：tokenizer、模型、优化器、GPU k
 \draw[llmarrow] (paper) -- (minimal);
 \draw[llmarrow] (minimal) -- (measure);
 \draw[llmarrow] (measure) -- (release);
-\draw[llmarrow] (release.south) .. controls +(0,-0.85) and +(0,-0.85) .. node[below, font=\small] {新证据} (paper.south);
+\draw[llmarrow] (release.north) .. controls +(0,0.85) and +(0,0.85) .. node[above, font=\scriptsize] {新证据} (paper.north);
 \draw[llmdash] (inv.north west) -- (minimal.south);
 \draw[llmdash] (inv.north east) -- (measure.south);
 \end{tikzpicture}

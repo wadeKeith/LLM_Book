@@ -21,7 +21,7 @@ The unifying discipline is experimental falsifiability. A serious practitioner s
 \draw[llmarrow] (paper) -- (minimal);
 \draw[llmarrow] (minimal) -- (measure);
 \draw[llmarrow] (measure) -- (release);
-\draw[llmarrow] (release.south) .. controls +(0,-0.95) and +(0,-0.95) .. node[below, font=\small] {new evidence} (paper.south);
+\draw[llmarrow] (release.north) .. controls +(0,0.9) and +(0,0.9) .. node[above, font=\scriptsize] {new evidence} (paper.north);
 \draw[llmdash] (invariants.north west) -- (minimal.south);
 \draw[llmdash] (invariants.north east) -- (measure.south);
 \end{tikzpicture}

@@ -16,26 +16,32 @@ The original \transformer combined self-attention, feed-forward sublayers, resid
 
 \begin{figure}[t]
 \centering
-\begin{tikzpicture}[node distance=6mm and 8mm]
-\node[llmblock, text width=2.0cm] (x) {$X$\\$B\times T\times d$};
-\node[llmblock, right=of x, text width=2.0cm] (n1) {Norm};
-\node[llmblock, right=of n1, text width=2.3cm] (attn) {Multi-head\\attention};
-\node[llmblock, right=of attn, text width=2.1cm] (add1) {Residual\\add};
-\node[llmblock, below=of add1, text width=2.0cm] (n2) {Norm};
-\node[llmblock, left=of n2, text width=2.2cm] (mlp) {Tokenwise\\MLP};
-\node[llmblock, left=of mlp, text width=2.1cm] (add2) {Residual\\add};
-\node[llmblock, left=of add2, text width=2.0cm] (z) {$Z$\\$B\times T\times d$};
+\resizebox{0.98\textwidth}{!}{%
+\begin{tikzpicture}[node distance=7mm and 8mm]
+\node[llmblock, text width=1.85cm] (x) {$X$\\$B\times T\times d$};
+\node[llmblock, right=of x, text width=1.85cm] (n1) {Norm};
+\node[llmblock, right=of n1, text width=2.2cm] (attn) {Multi-head\\attention};
+\node[llmblock, right=of attn, text width=2.0cm] (add1) {Residual\\add};
+\node[llmblock, right=of add1, text width=1.85cm] (h) {$H$\\$B\times T\times d$};
+\node[llmblock, below=13mm of x, text width=1.85cm] (h2) {$H$\\$B\times T\times d$};
+\node[llmblock, right=of h2, text width=1.85cm] (n2) {Norm};
+\node[llmblock, right=of n2, text width=2.2cm] (mlp) {Tokenwise\\MLP};
+\node[llmblock, right=of mlp, text width=2.0cm] (add2) {Residual\\add};
+\node[llmblock, right=of add2, text width=1.85cm] (z) {$Z$\\$B\times T\times d$};
 \draw[llmarrow] (x) -- (n1);
 \draw[llmarrow] (n1) -- (attn);
 \draw[llmarrow] (attn) -- (add1);
-\draw[llmarrow] (add1) -- (n2);
+\draw[llmarrow] (add1) -- (h);
+\draw[llmarrow] (h.south) -- (h2.north);
+\draw[llmarrow] (h2) -- (n2);
 \draw[llmarrow] (n2) -- (mlp);
 \draw[llmarrow] (mlp) -- (add2);
 \draw[llmarrow] (add2) -- (z);
-\draw[llmdash] (x.south) .. controls +(0,-1.0) and +(0,-1.0) .. node[below, font=\scriptsize] {skip path} (add1.south);
-\draw[llmdash] (add1.west) .. controls +(-0.7,-0.9) and +(0.7,-0.9) .. node[below, font=\scriptsize] {skip path} (add2.east);
-\node[llmnote, below=8mm of mlp, text width=0.78\textwidth] {The outer tensor shape is invariant. Attention changes how positions exchange information; the MLP changes each position's representation; residual paths preserve a stable route for activations and gradients.};
+\draw[llmdash] (x.north) .. controls +(0,0.9) and +(0,0.9) .. (add1.north);
+\draw[llmdash] (h2.south) .. controls +(0,-0.9) and +(0,-0.9) .. (add2.south);
+\node[llmnote, below=8mm of mlp, text width=0.70\textwidth] {The outer tensor shape is invariant. Attention changes how positions exchange information; the MLP changes each position's representation; residual paths preserve a stable route for activations and gradients.};
 \end{tikzpicture}
+}
 \caption{A shape-preserving view of the \transformer block. The attention sublayer changes which positions can exchange information; the MLP changes each position's representation; residual addition keeps a stable path through depth.}
 \label{fig:transformer-shape-preserving}
 \end{figure}
