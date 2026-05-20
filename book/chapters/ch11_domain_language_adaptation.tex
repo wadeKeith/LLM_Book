@@ -30,6 +30,27 @@ Unsafe advice in high-stakes domain & Policy and evidence boundaries unclear & D
 
 The most common error is to call every failure a fine-tuning problem. If the user asks about a private handbook updated last week, fine-tuning is the wrong default: retrieval gives freshness and access control. If the model cannot produce valid SQL for a known schema, supervised examples and execution validators may be appropriate. If the model uses too many tokens for a target language, tokenizer and continued pretraining choices matter before instruction style. If the application is medical, legal, or financial, the adaptation plan must include evidence boundaries and expert evaluation, not only a higher score.
 
+\begin{figure}[t]
+\centering
+\resizebox{0.98\textwidth}{!}{%
+\begin{tikzpicture}[node distance=0.9cm and 1.05cm]
+\node[llmblock, text width=0.20\textwidth] (fail) {Observed failure\\examples and slices};
+\node[llmblock, right=of fail, text width=0.20\textwidth] (diagnosis) {Diagnosis\\tokenizer, facts, format, policy};
+\node[llmblock, right=of diagnosis, text width=0.20\textwidth] (intervention) {Intervention\\retrieval, SFT, PEFT, CPT};
+\node[llmblock, right=of intervention, text width=0.20\textwidth] (evidence) {Evidence\\quality, cost, risk};
+\draw[llmarrow] (fail) -- (diagnosis);
+\draw[llmarrow] (diagnosis) -- (intervention);
+\draw[llmarrow] (intervention) -- (evidence);
+\draw[llmarrow] (evidence.south) .. controls +(0,-1.0) and +(0,-1.0) .. node[below, font=\small] {new failure slices} (fail.south);
+\node[llmnote, below=0.9cm of intervention, text width=0.54\textwidth] (rule) {The cheapest acceptable intervention is the one whose measured improvement survives freshness, privacy, rollback, and regression tests.};
+\draw[llmdash] (rule.north west) -- (diagnosis.south);
+\draw[llmdash] (rule.north east) -- (evidence.south);
+\end{tikzpicture}
+}
+\caption{Domain adaptation is a diagnosis loop. The same symptom can call for retrieval, supervised adaptation, continued pretraining, tokenizer work, or a governance change.}
+\label{fig:domain-adaptation-loop}
+\end{figure}
+
 \section{Language Adaptation}
 \label{sec:language-adaptation}
 
@@ -121,6 +142,21 @@ Domain adaptation should be evaluated by slices, not only by averages. A good re
 Contamination is a special concern. Domain benchmarks are often small and public. A model can memorize task templates or examples during continued pretraining or synthetic-data generation, especially when the same benchmark is used repeatedly to tune prompts and adapters. Evaluation sets should be held out before adaptation begins, and their overlap with training data should be checked by exact match, near-duplicate search, and task-specific leakage tests \cite{xu2024benchmark}.
 
 The final question is operational: does adaptation improve the deployed workflow? A model that raises an NL2SQL benchmark by two points but produces unsafe queries is worse. A model that sounds more medical but cites no evidence is worse. A model that improves Chinese chat but doubles context cost because of tokenization may be uneconomical. Adaptation is successful only when model quality, systems cost, safety, and governance improve together.
+
+This can be written as a release criterion rather than a slogan. Let $\Delta Q$ be the measured task-quality gain, $\Delta C$ the added cost, $\Delta R$ the added risk estimate, and $\Delta G$ the governance burden created by data, licensing, monitoring, or rollback. A domain release should be justified only when
+\[
+  U_{\mathrm{adapt}}
+  =
+  \Delta Q
+  -
+  \lambda_C \Delta C
+  -
+  \lambda_R \Delta R
+  -
+  \lambda_G \Delta G
+  > 0
+\]
+under weights chosen before the experiment. The equation is deliberately simple: it forces the team to admit that a benchmark gain is not enough when the adapted system is slower, harder to audit, or more dangerous.
 
 \section{Key Terms}
 \label{sec:domain-key-terms}

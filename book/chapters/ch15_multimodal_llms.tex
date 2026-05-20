@@ -10,6 +10,30 @@ The modern vision-language model (VLM) stack usually contains a modality encoder
 
 This chapter takes a wider view than LLM-centered visual question answering. Understanding and generation are converging. A frontier system may read an image, reason over a document, speak in real time, edit a picture, generate video, call tools, and eventually select actions in a physical or simulated environment inside one product contract. The core engineering ideas are representation alignment, token budgeting, generative objective choice, instruction data, action interfaces, evaluation, safety, and provenance across modalities.
 
+\begin{figure}[t]
+\centering
+\resizebox{0.98\textwidth}{!}{%
+\begin{tikzpicture}[node distance=0.9cm and 1.0cm]
+\node[llmblock, text width=0.18\textwidth] (media) {modalities\\text, image, audio, video, state};
+\node[llmblock, right=of media, text width=0.18\textwidth] (enc) {encoders\\patches, codecs, frames};
+\node[llmblock, right=of enc, text width=0.18\textwidth] (bridge) {interface\\tokens, queries, cross-attention};
+\node[llmblock, right=of bridge, text width=0.18\textwidth] (core) {foundation core\\reasoning and control};
+\node[llmblock, below=of bridge, text width=0.20\textwidth] (gen) {generators\\AR, diffusion, flow};
+\node[llmblock, below=of core, text width=0.20\textwidth] (act) {outputs\\text, media, tools, actions};
+\draw[llmarrow] (media) -- (enc);
+\draw[llmarrow] (enc) -- (bridge);
+\draw[llmarrow] (bridge) -- (core);
+\draw[llmarrow] (core) -- (act);
+\draw[llmarrow] (core.south west) -- (gen.north east);
+\draw[llmarrow] (gen) -- (act);
+\node[llmnote, below=0.65cm of media, text width=0.26\textwidth] (safety) {Safety and provenance wrap every channel: image text is data, generated media needs credentials, and action outputs need interlocks.};
+\draw[llmdash] (safety.east) -- (gen.west);
+\end{tikzpicture}
+}
+\caption{A unified multimodal system is an interface design problem. The core model may be shared, but each modality still needs explicit encoding, token-budget, generation, evaluation, and safety contracts.}
+\label{fig:unified-multimodal-stack}
+\end{figure}
+
 \section{Contrastive Pretraining}
 \subsection{Image-Text Alignment}
 CLIP-style pretraining learns a shared embedding space for images and text using large collections of image-caption pairs \cite{radford2021learning}. Let $f_\theta(I_i)$ be the normalized embedding of image $I_i$, and $g_\psi(T_j)$ be the normalized embedding of text $T_j$. For a batch of $N$ matched pairs, the image-to-text contrastive loss is
@@ -92,11 +116,48 @@ Omni systems push the interface further. Qwen3-Omni reports a single multimodal 
 
 Autoregressive language modeling is only one generative objective. For text, the next-token factorization is natural because output is a sequence. For images, audio, and video, sequential tokenization is possible but not always the most efficient or controllable representation. Generative foundation models therefore use a family of objectives.
 
+\begin{table}[t]
+\caption{Generative objective families used in multimodal foundation systems.}
+\label{tab:generative-objective-families}
+\small
+\centering
+\begin{tabular}{@{}p{0.18\textwidth}p{0.25\textwidth}p{0.23\textwidth}p{0.22\textwidth}@{}}
+\hline\noalign{\smallskip}
+Objective & Natural strengths & Typical cost surface & Failure modes \\
+\noalign{\smallskip}\svhline\noalign{\smallskip}
+Autoregressive & Streaming text, code, speech tokens, tool traces & Sequential decode length and KV cache & Awkward spatial ordering; slow high-resolution media \\
+Diffusion & Image/video fidelity, editing, diversity & Iterative denoising steps and guidance & Prompt drift; expensive sampling; safety filter dependence \\
+Rectified flow & Direct noise-to-data transport with transformer backbones & Step schedule and latent resolution & Flow mismatch; weak conditioning if text-media alignment is poor \\
+Hybrid AR-diffusion & Semantic planning plus continuous synthesis & Cascade latency and cross-module contracts & Beautiful but unfaithful media; brittle intermediate plans \\
+\noalign{\smallskip}\hline
+\end{tabular}
+\end{table}
+
 \subsection{Autoregressive Generation}
 Autoregressive multimodal models serialize media into tokens and train the model to predict the next token. This gives a unified training and inference story: the same decoder can condition on text, image tokens, audio tokens, and previous generated media tokens. The price is ordering. A fixed raster or codec order may be awkward for global image layout, bidirectional editing, or infilling. The model may need many sequential steps to generate content that humans perceive holistically.
 
 \subsection{Diffusion and Rectified Flow}
 Diffusion models generate by starting from noise and iteratively denoising toward data. In latent diffusion, the process occurs in a compressed latent space rather than directly over pixels. Diffusion Transformers (DiTs) replace the traditional U-Net denoiser with a transformer over latent patches and show predictable scaling behavior for image generation \cite{peebles2023dit}. Sora extends this idea to visual data by training text-conditioned diffusion models over spacetime patches of compressed video and image latents \cite{openai2024sora}. Stable Diffusion 3-style work uses rectified flow transformers for high-resolution text-to-image synthesis, treating generation as learning a flow from noise to data and emphasizing transformer-based multimodal interaction between text and image tokens \cite{esser2024rectifiedflow}.
+
+In the common denoising formulation, a clean latent $x_0$ is corrupted to $x_t$ and the model predicts the injected noise under condition $c$:
+\[
+  \mathcal{L}_{\mathrm{diff}}
+  =
+  \mathbb{E}_{x_0,\epsilon,t,c}
+  \left[
+    \left\|\epsilon-\epsilon_\theta(x_t,t,c)\right\|_2^2
+  \right].
+\]
+Rectified flow instead learns a velocity field between a noise endpoint $\xi_0$ and data endpoint $x_1$, often with $x_t=(1-t)\xi_0+t x_1$:
+\[
+  \mathcal{L}_{\mathrm{flow}}
+  =
+  \mathbb{E}_{\xi_0,x_1,t,c}
+  \left[
+    \left\|v_\theta(x_t,t,c)-(x_1-\xi_0)\right\|_2^2
+  \right].
+\]
+These formulas hide many implementation choices: latent encoder, timestep schedule, conditioning pathway, guidance, safety filters, and how generated media is linked back to prompt evidence.
 
 For a book about LLMs, the important point is not that every reader must implement a video generator. The point is that token prediction is no longer the only route to foundation-model behavior. Discrete diffusion language models such as Dream 7B refine text sequences through iterative denoising and expose any-order generation, infilling, and quality-speed tradeoffs \cite{ye2025dream7b}. MMaDA applies a unified diffusion formulation to textual reasoning, multimodal understanding, and text-to-image generation, with a post-training recipe tailored to diffusion foundation models \cite{yang2025mmada}. These systems are early, but they force the curriculum to discuss generation as a general modeling problem rather than treating language modeling as the whole field.
 
@@ -113,6 +174,15 @@ The next boundary after text, image, audio, and video is action. A vision-langua
 VLA systems make the phrase ``foundation model'' concrete and dangerous. Text generation errors can be edited; robot actions change the world. A VLA report must therefore describe observation frequency, action representation, control horizon, latency, embodiment, reset policy, safety interlocks, teleoperation data, simulation-to-real transfer, and failure recovery. A model that recognizes an object in a static image may still fail to grasp it because of occlusion, calibration error, friction, actuator limits, or delayed feedback.
 
 Recent VLA surveys frame the area as the unification of visual perception, natural language understanding, and embodied control, while emphasizing datasets, simulation platforms, architectural paradigms, and deployment challenges \cite{uddin2025vlasurvey}. For this book, the important curriculum decision is scope. Robotics is not a side note to chatbots, but a complete robotics textbook would dilute the main thread. The right placement is here: action is another modality with stricter safety, timing, and evaluation contracts. The same questions recur in harder form: what is the representation, what data defines the behavior, what objective trains it, what system serves it, and what evidence justifies deployment?
+
+A behavior-cloned VLA policy can be written as
+\[
+  \mathcal{L}_{\mathrm{VLA}}
+  =
+  -\sum_{t}
+  \log \pi_\theta(a_t \mid o_{\le t}, u, h_t),
+\]
+where $o_{\le t}$ is the observation history, $u$ is the language instruction, $h_t$ is optional task memory, and $a_t$ may be a discretized action token or a continuous control target. Reinforcement-learning variants replace or augment imitation with an expected return objective $\mathbb{E}_{\pi_\theta}[\sum_t \gamma^t r_t]$, but real-world exploration is constrained by safety, reset cost, and sparse rewards.
 
 World models connect action and generation. A video generator that predicts plausible futures, an embodied model that imagines the consequence of a grasp, and a planner that simulates alternative tool calls all use generative modeling as a decision aid. The risk is confusing visual plausibility with physical truth. A generated future can be coherent and still violate dynamics, contact, object permanence, or task constraints. Evaluation must therefore test not only whether the future looks realistic, but whether it supports better decisions under intervention.
 

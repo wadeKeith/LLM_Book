@@ -8,6 +8,27 @@ Evaluation is the feedback loop that tells an engineering team whether a modelin
 
 This chapter organizes evaluation as a measurement system. A measurement system has a construct, a dataset, a protocol, a metric, an uncertainty estimate, and a decision rule. ``MMLU score'' or ``win rate'' is not enough. The team must know what capability the metric is supposed to measure, where the examples came from, how the model was prompted, whether tools were allowed, how outputs were parsed, and what deployment decision follows from the result.
 
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[node distance=0.85cm and 0.9cm]
+\node[llmblock, text width=0.17\textwidth] (construct) {construct\\what is measured};
+\node[llmblock, right=of construct, text width=0.17\textwidth] (protocol) {protocol\\prompt, tools, budget};
+\node[llmblock, right=of protocol, text width=0.17\textwidth] (metric) {metric\\score and uncertainty};
+\node[llmblock, right=of metric, text width=0.17\textwidth] (decision) {decision\\launch, rollback, block};
+\node[llmblock, below=of protocol, text width=0.19\textwidth] (failures) {failure analysis\\slices and examples};
+\node[llmblock, below=of metric, text width=0.19\textwidth] (monitor) {monitoring\\drift and incidents};
+\draw[llmarrow] (construct) -- (protocol);
+\draw[llmarrow] (protocol) -- (metric);
+\draw[llmarrow] (metric) -- (decision);
+\draw[llmarrow] (metric.south) -- (monitor.north);
+\draw[llmarrow] (monitor.west) -- (failures.east);
+\draw[llmarrow] (failures.north) -- (protocol.south);
+\draw[llmarrow] (decision.south) |- (monitor.east);
+\end{tikzpicture}
+\caption{Evaluation is an evidence loop. A benchmark result is actionable only when it is tied to a construct, protocol, uncertainty estimate, failure analysis, monitoring plan, and deployment decision.}
+\label{fig:evaluation-evidence-loop}
+\end{figure}
+
 \section{Evaluation Design}
 \subsection{From Question to Decision}
 Every evaluation should begin with a decision. Examples:

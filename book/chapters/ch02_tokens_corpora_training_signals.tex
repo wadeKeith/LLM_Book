@@ -40,6 +40,31 @@ Evaluation set & Estimates generalization or safety & Contamination, prompt over
 \end{tabular}
 \end{table}
 
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[node distance=7mm and 6mm]
+\node[llmblock, text width=2.4cm] (sources) {Sources\\web, code, books, papers};
+\node[llmblock, text width=2.2cm, right=of sources] (license) {License and\\PII review};
+\node[llmblock, text width=2.2cm, right=of license] (filter) {Quality\\filters};
+\node[llmblock, text width=2.2cm, right=of filter] (dedup) {Exact and\\near dedup};
+\node[llmblock, text width=2.2cm, below=of filter] (mix) {Mixture\\weights};
+\node[llmblock, text width=2.2cm, left=of mix] (tok) {Tokenizer\\and templates};
+\node[llmblock, text width=2.2cm, right=of mix] (pack) {Packing\\and masks};
+\node[llmblock, text width=2.2cm, below=of mix] (audit) {Contamination\\audit};
+\draw[llmarrow] (sources) -- (license);
+\draw[llmarrow] (license) -- (filter);
+\draw[llmarrow] (filter) -- (dedup);
+\draw[llmarrow] (dedup) -- (mix);
+\draw[llmarrow] (tok) -- (mix);
+\draw[llmarrow] (mix) -- (pack);
+\draw[llmarrow] (pack) -- (audit);
+\draw[llmdash] (audit.west) .. controls +(-2.0,0.1) and +(0,-1.0) .. (license.south);
+\node[llmnote, below=7mm of audit, text width=0.80\textwidth] {The manifest is the durable artifact. Every filter, deduplication pass, mixture weight, tokenizer version, and benchmark-overlap decision should be recoverable without rerunning the entire pipeline.};
+\end{tikzpicture}
+\caption{A defensible data pipeline. The diagram is an original synthesis based on data-provenance and contamination concerns in large-model training reports and CS336-style implementation practice.}
+\label{fig:data-pipeline-manifest}
+\end{figure}
+
 \section{Tokenization as a Modeling Choice}
 \label{sec:tokenization-modeling-choice}
 
@@ -115,6 +140,13 @@ Evaluation requires separation between the evidence used for training and the ev
 A practical contamination audit should run at several levels: normalized string matching, token n-gram overlap, document-source overlap, and semantic or template-level review for high-value benchmarks. The audit should be asymmetric. It is not enough to ask whether the exact benchmark item appears in training data; one should also ask whether explanations, answer keys, generated variants, or translated versions appear. When a benchmark is used for model selection, its prompts and labels should be access-controlled like test data in any other empirical science.
 
 Provenance and licensing are publication constraints. Notes, slides, notebooks, code repositories, datasets, figures, and model outputs can be useful research artifacts, but they should not be copied into a textbook unless their license and authorship permit it. The safer pattern is to use such material to identify topics and then write original exposition from primary sources. For datasets, provenance review should record the source license, whether redistribution is allowed, whether personal data may be present, whether robots or platform terms restrict collection, and whether generated derivatives can be published.
+
+\paragraph{Quantitative audit lens.}
+A useful data chapter should give readers quantities they can compute. For mixture component $i$, track the tuple
+\begin{equation}
+  m_i = (D_i, p_i, E_i, r_i, q_i, c_i),
+\end{equation}
+where $D_i$ is available token count, $p_i$ sampling probability, $E_i=Sp_i$ expected exposure in a run of $S$ tokens, $r_i=E_i/D_i$ expected repeat rate, $q_i$ a quality score or filter stratum, and $c_i$ a contamination-risk flag. The repeat rate $r_i$ is especially important: a curated mathematical set may deserve upsampling, but high $r_i$ increases memorization and can make validation look better than deployment. This tuple forces data design to be discussed in the same units as optimization and evaluation.
 
 \section{Key Terms}
 \label{sec:chapter-two-key-terms}

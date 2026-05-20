@@ -12,6 +12,31 @@ The central design problem is to map a computation graph onto accelerators with 
 
 The discipline of this chapter is accounting. Each strategy moves bytes, computation, or idle time from one place to another. It is not enough to say that a method ``saves memory.'' A useful systems design says which bytes are saved, which collectives are added, how overlap is achieved, what happens during checkpointing, and which failure mode becomes more likely.
 
+\begin{figure}[t]
+\centering
+\resizebox{0.98\textwidth}{!}{%
+\begin{tikzpicture}[node distance=7mm and 7mm]
+\node[llmblock, text width=2.3cm] (model) {Model\\graph};
+\node[llmblock, right=of model, text width=2.4cm] (memory) {Memory\\partition};
+\node[llmblock, right=of memory, text width=2.4cm] (compute) {Compute\\partition};
+\node[llmblock, right=of compute, text width=2.4cm] (comm) {Collective\\schedule};
+\node[llmblock, below=of comm, text width=2.4cm] (io) {Checkpoint\\and I/O};
+\node[llmblock, left=of io, text width=2.4cm] (fault) {Failure\\recovery};
+\node[llmblock, left=of fault, text width=2.4cm] (quality) {Quality and\\throughput logs};
+\draw[llmarrow] (model) -- (memory);
+\draw[llmarrow] (memory) -- (compute);
+\draw[llmarrow] (compute) -- (comm);
+\draw[llmarrow] (comm) -- (io);
+\draw[llmarrow] (io) -- (fault);
+\draw[llmarrow] (fault) -- (quality);
+\draw[llmdash] (quality.north) .. controls +(0,1.1) and +(0,-1.1) .. node[above, font=\scriptsize] {retune parallelism} (memory.south);
+\node[llmnote, below=8mm of fault, text width=0.78\textwidth] {A parallel strategy is a joint choice of memory layout, collectives, checkpoint format, and operational runbook. The same mathematical model can be easy or impossible to train depending on this mapping.};
+\end{tikzpicture}
+}
+\caption{Distributed training as a systems mapping problem. Data, FSDP/ZeRO, tensor, pipeline, and expert parallelism move memory and communication pressure to different parts of the runtime.}
+\label{fig:distributed-systems-map}
+\end{figure}
+
 \section{Memory Accounting}
 \label{sec:training-memory-accounting}
 
@@ -197,6 +222,18 @@ Several checks catch serious bugs early:
 \item Kill one worker in a controlled test if the scheduler and checkpoint system claim fault tolerance.
 \end{enumerate}
 These tests are cheaper than discovering the same problems during a full run.
+
+\section{A Systems Design Checklist}
+\label{sec:distributed-systems-design-checklist}
+
+A publishable systems section should expose the following quantities, because they determine whether the reported model is reproducible rather than merely impressive:
+\begin{equation}
+  \mathcal{S}_{\mathrm{train}} =
+  (P_{\mathrm{dp}}, P_{\mathrm{tp}}, P_{\mathrm{pp}}, P_{\mathrm{ep}},
+   M_{\mathrm{peak}}, C_{\mathrm{step}}, T_{\mathrm{io}},
+   R_{\mathrm{restart}}),
+\end{equation}
+where the $P$ terms are data, tensor, pipeline, and expert parallel degrees, $M_{\mathrm{peak}}$ is peak per-rank memory, $C_{\mathrm{step}}$ is collective time per step, $T_{\mathrm{io}}$ is checkpoint or data-loading time, and $R_{\mathrm{restart}}$ is measured recovery time after failure. These values are not secondary engineering details: they explain why one training recipe can be repeated by another lab and another cannot.
 
 \section{Key Terms}
 \label{sec:distributed-key-terms}

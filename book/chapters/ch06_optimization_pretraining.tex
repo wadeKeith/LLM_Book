@@ -24,6 +24,29 @@ A practical pretraining plan begins with a units table. Let $N$ be trainable par
 \end{equation}
 The number of optimizer updates is approximately $D/B_{\mathrm{tok}}$. For dense decoder-only \transformers, a common planning approximation is that training costs about $6ND$ floating-point operations, excluding attention details, embedding/output costs, recomputation, data loading, and system inefficiency. The approximation is useful because it gives the right first-order economics: doubling either parameters or tokens roughly doubles training compute, while increasing context length changes both model-side attention cost and systems-side activation memory.
 
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[node distance=7mm and 7mm]
+\node[llmblock, text width=2.0cm] (plan) {Compute\\plan};
+\node[llmblock, right=of plan, text width=2.1cm] (pilot) {Pilot\\runs};
+\node[llmblock, right=of pilot, text width=2.1cm] (scale) {Scale law\\fit};
+\node[llmblock, right=of scale, text width=2.1cm] (full) {Full\\training};
+\node[llmblock, below=of full, text width=2.1cm] (dash) {Dashboard\\and alarms};
+\node[llmblock, left=of dash, text width=2.1cm] (ckpt) {Checkpoint\\and resume};
+\node[llmblock, left=of ckpt, text width=2.1cm] (eval) {Validation\\slices};
+\draw[llmarrow] (plan) -- (pilot);
+\draw[llmarrow] (pilot) -- (scale);
+\draw[llmarrow] (scale) -- (full);
+\draw[llmarrow] (full) -- (dash);
+\draw[llmarrow] (dash) -- (ckpt);
+\draw[llmarrow] (ckpt) -- (eval);
+\draw[llmdash] (eval.north) .. controls +(0,1.0) and +(0,-1.0) .. node[above, font=\scriptsize] {replan} (plan.south);
+\node[llmnote, below=8mm of ckpt, text width=0.78\textwidth] {Pretraining is a controlled experiment under failure. A serious run has pilot-derived expectations, token-indexed dashboards, tested recovery, and stop rules before the expensive phase begins.};
+\end{tikzpicture}
+\caption{Pretraining as an experimental control loop. Scaling-law planning, pilot runs, checkpoint recovery, and validation slices are not administrative extras; they determine whether the final loss curve is scientifically interpretable.}
+\label{fig:pretraining-control-loop}
+\end{figure}
+
 \section{Objective Accounting and Data Order}
 \label{sec:objective-data-order}
 
@@ -169,6 +192,18 @@ Training dashboards should separate optimization health from model quality. Opti
 Loss prediction can detect problems early. If prior scaling fits or smaller pilot runs predict a smooth loss curve, deviations deserve explanation. A loss above prediction may indicate poor data quality, an overly aggressive learning rate, insufficient warmup, a bug in masking, or lower-than-expected batch quality. A loss below prediction may be good news, but it can also signal validation leakage, duplicate-heavy data, or a tokenizer difference. The direction of surprise is less important than whether the team can explain it.
 
 Stop rules should be written before the run. Examples include a maximum token budget, a target validation loss, a budget cap, or a decision checkpoint where marginal loss improvement no longer justifies cost. Without a stop rule, teams are tempted to continue because the curve still decreases, even when the deployment target would be better served by spending compute on data cleaning, post-training, evaluation, or inference optimization.
+
+\section{A Quantitative Run Card}
+\label{sec:quantitative-run-card}
+
+A pretraining run should leave behind a run card that can be audited without private dashboards. At minimum, record
+\begin{equation}
+  \mathcal{C}_{\mathrm{run}}
+  =
+  (N, D, T, B_{\mathrm{tok}}, \eta_{\mathrm{mfu}}, \eta_{\mathrm{pack}},
+  \eta_{\mathrm{fail}}, \mathcal{V}, \mathcal{S}),
+\end{equation}
+where $\eta_{\mathrm{mfu}}$ is achieved model FLOPs utilization, $\eta_{\mathrm{pack}}$ is packing efficiency, $\eta_{\mathrm{fail}}$ is the fraction of wall-clock time lost to failures and checkpointing, $\mathcal{V}$ is the validation-slice set, and $\mathcal{S}$ is the stop-rule set. A model report that gives $N$ and benchmark scores but omits $D$, $T$, tokenizer, data mixture, training efficiency, or validation-slice behavior is not sufficient evidence for a reproducible training claim.
 
 \section{Implementation Notes}
 \label{sec:optimization-implementation-notes}

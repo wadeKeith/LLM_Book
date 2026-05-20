@@ -10,6 +10,32 @@ This chapter treats reasoning methods as budgeted algorithms. A method should sp
 
 The central caution is that longer reasoning text is not the same as faithful reasoning. A visible trace can be useful working memory, a persuasive explanation, a post-hoc rationalization, or a mixture of all three. Evaluation must therefore separate answer correctness, trace usefulness, trace faithfulness, latency, cost, and robustness under distribution shift.
 
+\begin{figure}[t]
+\centering
+\resizebox{0.98\textwidth}{!}{%
+\begin{tikzpicture}[node distance=7mm and 7mm]
+\node[llmblock, text width=2.1cm] (x) {Problem\\$x$};
+\node[llmblock, right=of x, text width=2.1cm] (router) {Difficulty\\router};
+\node[llmblock, above right=of router, text width=2.1cm] (direct) {Direct\\answer};
+\node[llmblock, right=of router, text width=2.1cm] (sample) {Sample /\\CoT};
+\node[llmblock, below right=of router, text width=2.1cm] (tool) {Search or\\tool};
+\node[llmblock, right=of sample, text width=2.1cm] (verify) {Verifier /\\vote};
+\node[llmblock, right=of verify, text width=2.1cm] (answer) {Answer or\\abstain};
+\draw[llmarrow] (x) -- (router);
+\draw[llmarrow] (router) -- (direct);
+\draw[llmarrow] (router) -- (sample);
+\draw[llmarrow] (router) -- (tool);
+\draw[llmarrow] (direct) -| (answer);
+\draw[llmarrow] (sample) -- (verify);
+\draw[llmarrow] (tool) -- (verify);
+\draw[llmarrow] (verify) -- (answer);
+\node[llmnote, below=9mm of verify, text width=0.78\textwidth] {Test-time compute is a budget allocation problem. More tokens, samples, branches, and tools are useful only when the controller and verifier improve correctness faster than they increase cost and risk.};
+\end{tikzpicture}
+}
+\caption{Reasoning as adaptive test-time compute. The abstraction covers chain-of-thought, self-consistency, verifier selection, tool use, and routing in recent reasoning systems \cite{deepseek2025r1,snell2024scaling,yang2025testtime}.}
+\label{fig:reasoning-budget-controller}
+\end{figure}
+
 \section{Prompted Reasoning}
 \subsection{Chain of Thought}
 Chain-of-thought (CoT) prompting asks the model to produce intermediate steps before the final answer. In few-shot CoT, the prompt includes examples of step-by-step solutions. In zero-shot variants, the prompt asks for a reasoning process directly. CoT often helps arithmetic, symbolic, commonsense, and multi-hop tasks because it gives the autoregressive model more intermediate tokens on which to condition.
@@ -180,6 +206,24 @@ Frontier reasoning models released in 2024 and 2025 made test-time compute a fir
 
 These reports should be read as engineering evidence, not as final scientific explanations. They show that reasoning performance can be improved by post-training and inference-time computation. They do not prove that visible chains are faithful, that reward-trained reasoning generalizes outside verifiable domains, or that benchmark gains imply robust planning in the real world.
 
+\begin{table}[t]
+\centering
+\caption{Reasoning methods as compute-allocation policies.}
+\label{tab:reasoning-method-costs}
+\begin{tabular}{p{0.20\textwidth}p{0.25\textwidth}p{0.24\textwidth}p{0.23\textwidth}}
+\toprule
+Method & Added computation & Best fit & Main risk \\
+\midrule
+Chain of thought & Extra intermediate tokens & Multi-step symbolic or explanatory tasks & Trace unfaithfulness and leakage of sensitive reasoning \\
+Self-consistency & Parallel samples plus vote or normalization & Tasks with diverse independent solution paths & Correlated errors and high token cost \\
+Program-of-thought & Code generation and execution & Arithmetic, parsing, simulation, and structured checks & Sandbox, dependency, and hidden test failures \\
+Verifier selection & Candidate generation plus scoring & Code, math, schemas, and proof-like domains & Reward hacking or verifier blind spots \\
+Tree search & Branch expansion and partial-state scoring & Planning or combinatorial tasks with useful heuristics & State explosion and misleading heuristic scores \\
+RLVR/GRPO & Rollouts, verifiable rewards, and policy updates & Domains with cheap automatic correctness checks & Shortcut rewards and narrow task coverage \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 \section{Evaluation Cautions}
 \subsection{Answer Accuracy Is Not Enough}
 A reasoning evaluation should specify:
@@ -192,6 +236,19 @@ A reasoning evaluation should specify:
     \item cost metric: tokens, latency, dollars, energy, or hardware occupancy.
 \end{itemize}
 Reporting only accuracy hides the central tradeoff. A model that solves 5\% more tasks with 20 times more generated tokens may be valuable for theorem proving and unacceptable for customer support.
+
+\section{Cost Curves and pass@k}
+\label{sec:reasoning-cost-curves-passk}
+
+For independent samples with single-sample success probability $p$, the idealized probability that at least one of $k$ samples succeeds is
+\begin{equation}
+  \mathrm{pass@}k = 1-(1-p)^k.
+\end{equation}
+This formula is optimistic when samples are correlated, when the selector cannot identify the correct solution, or when the verifier is flawed. It is still useful because it exposes diminishing returns: the first few samples may help, but each additional sample adds cost. A reasoning evaluation should therefore report a curve
+\begin{equation}
+  \left\{(C_k, A_k): k\in\mathcal{K}\right\},
+\end{equation}
+where $C_k$ is tokens, latency, or dollars and $A_k$ is accuracy or task success. A single best-score point hides whether the system is compute-efficient.
 
 \subsection{Trace Faithfulness}
 Visible reasoning traces are tempting evaluation artifacts. They let graders inspect steps, train process reward models, and debug failures. But a trace can be optimized for the grader. If the final answer is produced by internal activations and the visible trace is generated for presentation, then step-level natural-language evaluation may overstate reliability. Conversely, hiding all traces makes debugging and accountability harder. Many products therefore expose concise rationales or cited calculations, not raw chain-of-thought.

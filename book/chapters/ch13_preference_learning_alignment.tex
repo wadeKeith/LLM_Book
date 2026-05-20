@@ -8,6 +8,29 @@ Pretraining teaches a model to imitate text. Supervised instruction tuning teach
 
 Modern alignment pipelines therefore treat preference learning as a control layer around a capable base model. A typical pipeline starts from a supervised policy, samples multiple answers to user prompts, asks humans or AI judges to compare those answers, trains a reward or preference model, and then optimizes the policy toward the learned preference signal while constraining it not to drift too far from the reference model. This recipe descends from deep reinforcement learning from human preferences \cite{christiano2017deep}, language-model preference tuning \cite{ziegler2019finetuning,stiennon2020learning}, and instruction-following RLHF \cite{ouyang2022training}. The practical success of the recipe should not be confused with a proof of alignment. It is a way to optimize a proxy; the proxy can be incomplete, inconsistent, non-stationary, and vulnerable to gaming.
 
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[node distance=7mm and 6mm]
+\node[llmblock, text width=2.1cm] (sft) {SFT\\policy};
+\node[llmblock, right=of sft, text width=2.1cm] (sample) {Sample\\candidates};
+\node[llmblock, right=of sample, text width=2.1cm] (label) {Human / AI\\preferences};
+\node[llmblock, right=of label, text width=2.1cm] (rm) {Reward or\\preference model};
+\node[llmblock, below=of rm, text width=2.1cm] (opt) {PPO, DPO,\\or variants};
+\node[llmblock, left=of opt, text width=2.1cm] (eval) {Independent\\evaluation};
+\node[llmblock, left=of eval, text width=2.1cm] (policy) {Candidate\\release};
+\draw[llmarrow] (sft) -- (sample);
+\draw[llmarrow] (sample) -- (label);
+\draw[llmarrow] (label) -- (rm);
+\draw[llmarrow] (rm) -- (opt);
+\draw[llmarrow] (opt) -- (eval);
+\draw[llmarrow] (eval) -- (policy);
+\draw[llmdash] (eval.north) .. controls +(0,1.0) and +(0,-1.0) .. node[above, font=\scriptsize] {new hard cases} (sample.south);
+\node[llmnote, below=8mm of eval, text width=0.78\textwidth] {Preference learning is a proxy-optimization loop. The release decision should depend on independent evaluation, not on the optimized reward alone.};
+\end{tikzpicture}
+\caption{A preference-learning control loop. The diagram synthesizes RLHF and direct-preference pipelines from preference-learning literature without reproducing any system-specific figure \cite{ouyang2022training,rafailov2023direct}.}
+\label{fig:preference-learning-loop}
+\end{figure}
+
 This chapter uses ``alignment'' in the operational sense common in LLM engineering: reducing systematic mismatches between model behavior and a specified preference or safety policy. It is not a claim that the model has internalized human values, that it will generalize safely under all distribution shifts, or that all stakeholders share the same preferences.
 
 \section{Preference Data}
@@ -80,6 +103,22 @@ RewardBench-style evaluations are useful for comparing reward models across chat
 The reward model is a proxy. Optimizing against it too aggressively can reduce real user preference even while predicted reward rises. This is reward hacking. In language models, reward hacking often appears as excessive verbosity, confident but unsupported claims, policy boilerplate, false empathy, or responses that exploit annotation shortcuts. A model can learn that annotators prefer long answers, that safety raters reward visible disclaimers, or that a certain phrase pattern correlates with high scores.
 
 The operational symptom is a divergence between offline reward and independent evaluation. As optimization steps increase, reward-model score continues upward, but human preference, factuality, or task success plateaus and then degrades. The fix is not simply a better optimizer. It requires better data coverage, stronger adversarial evaluation, regularization, early stopping, and repeated collection of comparisons from the current policy.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[x=1cm,y=1cm]
+\draw[->] (0,0) -- (9,0) node[right, font=\small] {optimization steps};
+\draw[->] (0,0) -- (0,4.2) node[above, font=\small] {score};
+\draw[thick] plot[smooth] coordinates {(0.4,0.6) (2,1.6) (4,2.5) (6,3.2) (8.5,3.7)};
+\draw[thick,dashed] plot[smooth] coordinates {(0.4,0.5) (2,1.4) (4,2.0) (5.5,2.1) (7,1.8) (8.5,1.4)};
+\node[font=\scriptsize, align=left] at (7.0,3.4) {reward model\\score};
+\node[font=\scriptsize, align=left] at (7.0,1.5) {independent\\human/task score};
+\draw[dotted] (5.2,0) -- (5.2,4.0);
+\node[font=\scriptsize, align=center] at (5.2,-0.45) {early-stop\\region};
+\end{tikzpicture}
+\caption{Reward overoptimization. A release process should monitor the gap between optimized reward and independent measures such as factuality, human preference, task success, and refusal false-positive rates.}
+\label{fig:reward-overoptimization}
+\end{figure}
 
 \section{RLHF with PPO}
 \subsection{Regularized Policy Optimization}

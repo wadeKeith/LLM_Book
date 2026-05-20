@@ -57,6 +57,30 @@ Continuous batching turns serving into a scheduling problem. Each request has pr
 
 PagedAttention, introduced in vLLM, addresses memory management by storing KV cache in fixed-size blocks rather than requiring each sequence to occupy a contiguous allocation \cite{kwon2023efficient}. The analogy to virtual memory is useful: logical token positions map to physical cache blocks, and blocks can be shared, allocated, or freed as sequences grow and finish. This reduces fragmentation and makes continuous batching more effective. It does not remove the KV-cache cost; it makes the cost manageable under variable-length traffic.
 
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[node distance=7mm and 5mm]
+\node[llmblock, text width=2.3cm] (req) {Incoming\\requests};
+\node[llmblock, right=of req, text width=2.2cm] (adm) {Admission\\control};
+\node[llmblock, right=of adm, text width=2.2cm] (prefill) {Prefill\\queue};
+\node[llmblock, right=of prefill, text width=2.2cm] (decode) {Decode\\batch};
+\node[llmblock, below=of decode, text width=2.2cm] (stream) {Streaming\\and stop};
+\node[llmblock, left=of stream, text width=2.2cm] (kv) {Paged KV\\blocks};
+\node[llmblock, left=of kv, text width=2.2cm] (filters) {Safety and\\validators};
+\draw[llmarrow] (req) -- (adm);
+\draw[llmarrow] (adm) -- (prefill);
+\draw[llmarrow] (prefill) -- (decode);
+\draw[llmarrow] (decode) -- (stream);
+\draw[llmarrow] (decode) -- (kv);
+\draw[llmarrow] (kv) -- (decode);
+\draw[llmarrow] (stream) -- (filters);
+\draw[llmdash] (filters.west) -- ++(-1.1,0) node[left, font=\scriptsize] {return, retry, or block};
+\node[llmnote, below=8mm of kv, text width=0.78\textwidth] {The scheduler mediates compute and memory. Long prompts pressure prefill; long outputs pressure decode and KV blocks; filters and validators add latency that must be load-tested with the model rather than appended after the fact.};
+\end{tikzpicture}
+\caption{An inference service as a resource-control system. The PagedAttention idea from vLLM motivates the KV-block abstraction, but the figure is an original synthesis of the full serving loop \cite{kwon2023efficient}.}
+\label{fig:inference-serving-loop}
+\end{figure}
+
 \begin{table}[t]
 \caption{Serving bottlenecks differ across request shapes.}
 \label{tab:serving-bottlenecks}
@@ -145,6 +169,19 @@ Mixed production trace & & & & \\
 \end{table}
 
 Tail latency deserves special attention. Users experience the slow request, not the mean. Tail latency can come from queueing, long prompts, cache fragmentation, straggler kernels, network backpressure, safety filters, or retries. Averages hide all of these. A good load test captures traces for the slowest requests and attributes time to queue, prefill, decode, post-processing, and streaming flush.
+
+\section{Worked Capacity Example}
+\label{sec:serving-worked-capacity-example}
+
+Consider a 32-layer model with $H_{\mathrm{kv}}=8$, $d_h=128$, BF16 cache elements, and an active cache budget of 40 GiB after weights and runtime buffers. Each token in one sequence consumes approximately
+\begin{equation}
+  2 \times L \times H_{\mathrm{kv}} \times d_h \times 2
+  =
+  2 \times 32 \times 8 \times 128 \times 2
+  =
+  131{,}072 \ \mathrm{bytes}
+\end{equation}
+of KV storage. A 40 GiB cache can therefore hold roughly $40\times 2^{30}/131{,}072 \approx 327{,}680$ active sequence tokens before fragmentation and block overhead. That budget could support about 80 conversations at 4096 active tokens, or 20 long-document requests at 16k active tokens, but not both at the same latency target. This arithmetic is crude, yet it is the kind of calculation that should precede claims about long-context deployment.
 
 \section{Implementation Notes}
 \label{sec:serving-implementation-notes}

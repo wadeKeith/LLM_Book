@@ -18,6 +18,29 @@ where $q$ is the user query, $E_k$ is a selected evidence set, and $a$ is the an
 
 The central benefit is separation of concerns. Model weights store general linguistic and reasoning behavior; the retrieval layer stores mutable or private evidence. This separation improves freshness, auditability, and access control. It does not guarantee truth. If retrieval misses the relevant document, the generator may hallucinate. If retrieval returns misleading evidence, the generator may faithfully summarize the wrong source. If retrieved text contains instructions to ignore the user or reveal secrets, the generator may follow the wrong authority. The system must therefore evaluate retrieval, generation, and control logic separately.
 
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[node distance=7mm and 6mm]
+\node[llmblock, text width=2.1cm] (query) {User\\query};
+\node[llmblock, right=of query, text width=2.1cm] (rewrite) {Rewrite /\\decompose};
+\node[llmblock, right=of rewrite, text width=2.1cm] (retrieve) {Hybrid\\retrieve};
+\node[llmblock, right=of retrieve, text width=2.1cm] (rerank) {Rerank\\and filter};
+\node[llmblock, below=of rerank, text width=2.1cm] (context) {Context\\builder};
+\node[llmblock, left=of context, text width=2.1cm] (gen) {Grounded\\generation};
+\node[llmblock, left=of gen, text width=2.1cm] (check) {Citation and\\policy check};
+\draw[llmarrow] (query) -- (rewrite);
+\draw[llmarrow] (rewrite) -- (retrieve);
+\draw[llmarrow] (retrieve) -- (rerank);
+\draw[llmarrow] (rerank) -- (context);
+\draw[llmarrow] (context) -- (gen);
+\draw[llmarrow] (gen) -- (check);
+\draw[llmdash] (check.west) -- ++(-1.0,0) node[left, font=\scriptsize] {answer, abstain, or retry};
+\node[llmnote, below=8mm of gen, text width=0.78\textwidth] {A RAG system should be evaluated component by component: retrieval recall, context precision, citation faithfulness, answer quality, injection resistance, freshness, and permissions.};
+\end{tikzpicture}
+\caption{A RAG pipeline as a controlled evidence path. The figure is an original synthesis from dense retrieval, RAG, and context-engineering literature \cite{karpukhin2020dense,lewis2020retrieval,mei2025context}.}
+\label{fig:rag-controlled-evidence-path}
+\end{figure}
+
 \section{Indexing and Retrieval}
 \label{sec:indexing-retrieval}
 
@@ -154,6 +177,32 @@ Latency has several components:
 Optimizing one term can worsen another. Retrieving more chunks may improve recall but increase reranking and prefill time. Compressing chunks may reduce prefill but harm faithfulness. Calling tools can improve correctness but add network latency and failure modes. A production report should include latency percentiles, cost per request, cache hit rate, retrieval recall, answer quality, and safety failures together.
 
 Freshness also has a systems cost. Indexes must be rebuilt or incrementally updated. Deleted documents must be removed from search results. Permission changes must take effect quickly. If the index is stale, a RAG answer may be worse than a base-model answer because it carries the appearance of grounded authority.
+
+\section{Agent Runtime Boundaries}
+\label{sec:agent-runtime-boundaries}
+
+Agentic systems need a boundary diagram because the model is only one actor. The model proposes an action; the runtime validates schema, identity, permissions, rate limits, sandbox constraints, and rollback policy; the tool returns an observation; the context builder decides what portion of the observation re-enters the model. If the model is allowed to validate its own permissions, the system has already lost the security boundary.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[node distance=7mm and 8mm]
+\node[llmblock, text width=2.2cm] (state) {Typed\\state};
+\node[llmblock, right=of state, text width=2.2cm] (model) {LLM\\policy};
+\node[llmblock, right=of model, text width=2.2cm] (runtime) {Runtime\\guard};
+\node[llmblock, right=of runtime, text width=2.2cm] (tool) {Tool or\\environment};
+\node[llmblock, below=of tool, text width=2.2cm] (obs) {Observation};
+\node[llmblock, left=of obs, text width=2.2cm] (audit) {Audit log\\and budget};
+\draw[llmarrow] (state) -- (model);
+\draw[llmarrow] (model) -- node[above, font=\scriptsize] {proposed call} (runtime);
+\draw[llmarrow] (runtime) -- node[above, font=\scriptsize] {authorized call} (tool);
+\draw[llmarrow] (tool) -- (obs);
+\draw[llmarrow] (obs) -- (audit);
+\draw[llmarrow] (audit) -| (state);
+\draw[llmdash] (runtime.south) -- node[right, font=\scriptsize] {deny / repair} (audit.north);
+\end{tikzpicture}
+\caption{A tool-using agent runtime. The model proposes actions, but the runtime owns authority, permissions, sandboxing, logging, and budget enforcement.}
+\label{fig:agent-runtime-boundary}
+\end{figure}
 
 \section{Key Terms}
 \label{sec:rag-key-terms}

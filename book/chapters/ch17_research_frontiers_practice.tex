@@ -1,25 +1,44 @@
 \chapter{Research Frontiers and Practice Roadmap}
 \label{ch:research-frontiers-practice}
 
-\abstract{This chapter audits the coverage of the book against current language-model and generative-foundation-model practice and connects the previous chapters to a concrete research and engineering roadmap. It emphasizes from-scratch implementation, data pipelines, resource accounting, emerging frontier model designs, reasoning reinforcement learning, adaptive test-time compute, multimodal and generative systems, agentic systems, and the open questions that remain after reading the book.}
+\abstract{This chapter connects the preceding technical material to a durable research and engineering roadmap. It emphasizes from-scratch implementation, data pipelines, resource accounting, emerging frontier model designs, reasoning reinforcement learning, adaptive test-time compute, multimodal and generative systems, agentic systems, and the operational evidence needed to turn new papers into dependable systems.}
 
-\section{Why the Book Needs a Frontier Chapter}
+\section{Why Frontier Practice Changes the Curriculum}
 \label{sec:why-frontier-chapter}
 
 The preceding chapters explain the main lifecycle of a large language model: data, tokenization, architecture, pretraining, distributed systems, inference, adaptation, retrieval, alignment, reasoning, multimodality, generation, and evaluation. That lifecycle is stable enough to teach, but the frontier is not stable enough to freeze. The most important lesson from recent systems is that research progress often comes from changing the interface between chapters. A model report may describe an architectural change, but the observed gain may depend on the data mixture, optimizer, post-training recipe, evaluation harness, inference budget, and serving stack. A deployment result may look like an application result while actually being a systems result.
 
-For that reason, this final main chapter is written as an audit. It asks what the manuscript still needs if it is read as a serious guide to current practice. The answer is not another catalog of model names. The missing layer is the discipline that turns concepts into falsifiable experiments: implement the components yourself, account for compute and memory, measure data quality, run scaling experiments, report inference cost, and evaluate task behavior under realistic constraints. Stanford's CS336, \emph{Language Modeling from Scratch}, makes this discipline explicit by organizing the course around tokenization, PyTorch and resource accounting, architecture and hyperparameters, attention alternatives and mixture-of-experts, GPUs and kernels, parallelism, scaling laws, inference, evaluation, data processing, and alignment or reasoning RL \cite{stanfordcs3362026}. This book should be read in the same spirit: a chapter is incomplete until the reader can state the objective, implement the simplified system, and explain how the measurement could be wrong.
+The unifying discipline is experimental falsifiability. A serious practitioner should be able to state the objective, implement a minimal version, account for compute and memory, measure data quality, run scaling or ablation experiments, report inference cost, and explain how the measurement could be wrong. Stanford's CS336, \emph{Language Modeling from Scratch}, makes this discipline explicit by organizing the course around tokenization, PyTorch and resource accounting, architecture and hyperparameters, attention alternatives and mixture-of-experts, GPUs and kernels, parallelism, scaling laws, inference, evaluation, data processing, and alignment or reasoning RL \cite{stanfordcs3362026}. The same standard applies here: a chapter is complete only when the reader can connect a concept to an implementation, a measurement, and a failure mode.
 
-\section{What Is Covered, and What Still Needs Attention}
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[node distance=0.85cm and 0.9cm]
+\node[llmblock, text width=0.17\textwidth] (paper) {paper claim\\what changed};
+\node[llmblock, right=of paper, text width=0.17\textwidth] (minimal) {minimal system\\what reproduces it};
+\node[llmblock, right=of minimal, text width=0.17\textwidth] (measure) {measurement\\quality, cost, risk};
+\node[llmblock, right=of measure, text width=0.17\textwidth] (release) {system decision\\ship, study, reject};
+\node[llmnote, below=0.75cm of minimal, text width=0.48\textwidth] (invariants) {Durable invariants: data provenance, objective, architecture, optimizer, runtime, evaluation, governance.};
+\draw[llmarrow] (paper) -- (minimal);
+\draw[llmarrow] (minimal) -- (measure);
+\draw[llmarrow] (measure) -- (release);
+\draw[llmarrow] (release.south) .. controls +(0,-0.95) and +(0,-0.95) .. node[below, font=\small] {new evidence} (paper.south);
+\draw[llmdash] (invariants.north west) -- (minimal.south);
+\draw[llmdash] (invariants.north east) -- (measure.south);
+\end{tikzpicture}
+\caption{Frontier practice is a loop from claim to minimal reproduction to measurement to system decision. Novel model names change quickly; the evidence loop should not.}
+\label{fig:frontier-practice-loop}
+\end{figure}
+
+\section{Scope of the Roadmap}
 \label{sec:coverage-audit}
 
-The current manuscript covers the canonical decoder-only \transformer stack, LLaMA-class design, pretraining optimization, distributed training, inference serving, supervised instruction tuning, PEFT, domain adaptation, RAG, context engineering, typed memory, preference learning, reasoning, multimodality, generative foundation models, action interfaces, evaluation, safety, and governance. It also includes provenance and contamination concerns, which are essential for publication.
+The roadmap covers the canonical decoder-only \transformer stack, LLaMA-class design, pretraining optimization, distributed training, inference serving, supervised instruction tuning, PEFT, domain adaptation, RAG, context engineering, typed memory, preference learning, reasoning, multimodality, generative foundation models, action interfaces, evaluation, safety, and governance. It also includes provenance and contamination concerns because modern foundation-model evidence is incomplete without them.
 
-The chapter structure is still reasonable after reviewing CS336-style course coverage and 2025--2026 frontier papers. Splitting the book into separate volumes for LLMs, multimodal understanding, image/video generation, embodied agents, and governance would make each topic deeper, but it would weaken the pedagogical argument of this manuscript: modern foundation-model work is a coupled lifecycle. The right correction is therefore not to add many short topical chapters. The right correction is to broaden Chapter~\ref{ch:multimodal-llms} from ``multimodal LLMs'' to ``multimodal and generative foundation models,'' strengthen Chapter~\ref{ch:retrieval-tools-agents} with context engineering and memory, strengthen Chapter~\ref{ch:preference-learning-alignment} with post-DPO objectives, and strengthen Chapter~\ref{ch:evaluation-safety-governance} with long-context, agentic, generative, embodied, interpretability, unlearning, watermarking, and provenance coverage.
+Splitting the field into separate treatments of LLMs, multimodal understanding, image/video generation, embodied agents, and governance would allow more local depth, but it would hide the central engineering fact: modern foundation-model work is a coupled lifecycle. The curriculum should therefore keep those topics connected. Multimodality changes context construction and serving; reasoning changes post-training and inference budgets; MoE changes training stability and schedulers; synthetic media changes evaluation and provenance; agents change safety and rollback.
 
-First, the book should continue to deepen implementation assignments. A modern reader benefits from writing a tokenizer, a small GPT, a masked SFT collator, a LoRA adapter, a retrieval evaluator, and a tiny verifier loop. These exercises should report not only task accuracy but also memory, FLOPs, tokens per second, and failure examples. The point is not to reproduce frontier scale. It is to make the invariants visible before scale hides them.
+First, implementation assignments should remain central. A modern reader benefits from writing a tokenizer, a small GPT, a masked SFT collator, a LoRA adapter, a retrieval evaluator, and a tiny verifier loop. These exercises should report not only task accuracy but also memory, FLOPs, tokens per second, and failure examples. The point is not to reproduce frontier scale. It is to make the invariants visible before scale hides them.
 
-Second, the systems story should keep expanding toward disaggregated inference and sparse models. Chapter~\ref{ch:inference-serving} explains prefill, decode, KV cache, batching, quantization, and speculative decoding. Frontier serving increasingly adds mixture-of-experts routing, expert parallelism, prefill-decode disaggregation, cross-cluster routing, and heterogeneous resource allocation. The Frontier simulator paper is a useful example of how serving research is moving from dense co-located models to MoE and disaggregated designs \cite{feng2025frontier}. A practical systems chapter should ask how model architecture changes the scheduler, not only how the scheduler serves a fixed model.
+Second, systems analysis must keep expanding toward disaggregated inference and sparse models. Frontier serving increasingly adds mixture-of-experts routing, expert parallelism, prefill-decode disaggregation, cross-cluster routing, and heterogeneous resource allocation. The Frontier simulator paper is a useful example of how serving research is moving from dense co-located models to MoE and disaggregated designs \cite{feng2025frontier}. A practical systems chapter should ask how model architecture changes the scheduler, not only how the scheduler serves a fixed model.
 
 Third, the multimodal and generative chapter should be kept current. Qwen3-VL reports 256K-token long-context comprehension across text and interleaved multimodal inputs, stronger video and visual reasoning, and explicit temporal alignment mechanisms \cite{qwen2025qwen3vl}. Qwen3-Omni pushes the interface further by unifying text, image, audio, and video understanding with speech generation and low-latency streaming considerations \cite{qwen2025qwen3omni}. Janus-Pro, MMaDA, Dream 7B, Sora-style video generation, AR-Omni, RT-2, and OpenVLA show that the field is no longer only about attaching a vision encoder to a chatbot \cite{chen2025januspro,yang2025mmada,ye2025dream7b,openai2024sora,cheng2026aromni,brohan2023rt2,kim2024openvla}. The conceptual lesson is that multimodality and generation change context construction, objective choice, latency, action safety, privacy, evaluation, and product contracts.
 
@@ -66,6 +85,40 @@ The data chapter and the evaluation chapter should be read as one loop. Data fil
 A current data pipeline should record source licenses, collection dates, filtering rules, deduplication method, personally identifiable information policy, language distribution, document quality scores, synthetic-data generator versions, and benchmark overlap checks. A current evaluation pipeline should record prompt templates, decoding settings, tool permissions, retrieval indexes, judge models, human rubrics, confidence intervals, and failure slices. A current governance review should connect those artifacts to release decisions: what model is being launched, for whom, under what constraints, with what monitoring, and with what rollback path.
 
 This is also where CS336-style implementation and frontier research meet. Data assignments that process Common Crawl, scaling assignments that fit loss curves, and alignment assignments that train reasoning models are not isolated course tasks. They are a compressed version of the lifecycle that real model teams must make auditable \cite{stanfordcs3362026}.
+
+\section{Frontier Evidence Matrix}
+\label{sec:frontier-evidence-matrix}
+
+New papers should enter the curriculum through evidence, not novelty pressure. A frontier claim is useful for this book when it changes a durable variable in the lifecycle and when that change can be reproduced, measured, and stress-tested. Table~\ref{tab:frontier-evidence-matrix} summarizes the screening logic.
+
+\begin{table}[t]
+\centering
+\caption{How frontier directions should be incorporated into a durable curriculum.}
+\label{tab:frontier-evidence-matrix}
+\begin{tabular}{p{0.20\textwidth}p{0.30\textwidth}p{0.38\textwidth}}
+\toprule
+Direction & Variables to track & Evidence needed before incorporation \\
+\midrule
+Sparse MoE & Total parameters, active parameters, router, expert parallelism, serving latency & Better quality per dollar than dense baselines, with router stability and load-balance evidence \\
+Long context and memory & Position mechanism, KV cost, retrieval, compression, conflicting evidence & More than accepting long inputs: evidence for locating, aggregating, and rejecting evidence \\
+Reasoning RL and test-time compute & Reward, samples, verifier, token budget, pass@k/pass@1 & Accuracy gains reported with latency, cost, trace policy, and verifier failure modes \\
+Unified multimodal generation & Representation, objective, sampling steps, provenance controls & Joint evaluation of understanding, generation, temporal consistency, and safety boundaries \\
+VLA and action models & Observation stream, action space, control frequency, interlocks, reset cost & Task success paired with unsafe-action rate and human-intervention policy \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+One way to keep the decision explicit is to score a claim as
+\begin{equation}
+  S_{\mathrm{frontier}}
+  =
+  \Delta Q
+  - \lambda_C \Delta C
+  - \lambda_R \Delta R
+  - \lambda_U U
+  + \lambda_E E,
+\end{equation}
+where $\Delta Q$ is reproduced quality gain, $\Delta C$ is additional training or serving cost, $\Delta R$ is safety or governance risk, $U$ is residual uncertainty, and $E$ is independent evidence strength. The equation is not a universal metric. Its purpose is to prevent the curriculum from changing because a model name is new, a benchmark number is high, or a paper is fashionable before the underlying claim is stable.
 
 \section{A Reader's Roadmap After This Book}
 \label{sec:reader-roadmap}

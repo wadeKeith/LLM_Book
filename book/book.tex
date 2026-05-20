@@ -12,11 +12,20 @@
 \usepackage{amsmath}
 \usepackage{amssymb}
 \usepackage{booktabs}
+\usepackage{tikz}
 \usepackage{url}
 \usepackage{xspace}
 \usepackage{newtxtext}
 \usepackage[varvw]{newtxmath}
 \usepackage[hidelinks]{hyperref}
+\usetikzlibrary{arrows.meta,positioning,fit,calc,shapes.geometric}
+\tikzset{
+  llmblock/.style={draw, rounded corners=2pt, align=center, minimum height=7mm, inner xsep=5pt, inner ysep=4pt, font=\small, fill=black!3},
+  llmwide/.style={draw, rounded corners=2pt, align=center, minimum height=8mm, inner xsep=6pt, inner ysep=4pt, font=\small, fill=black!2},
+  llmnote/.style={draw, rounded corners=2pt, align=left, inner xsep=5pt, inner ysep=4pt, font=\scriptsize, fill=black!1},
+  llmarrow/.style={-Latex, thick},
+  llmdash/.style={-Latex, thick, dashed}
+}
 \hypersetup{
   pdftitle={Large Language and Generative Foundation Models: Foundations, Systems, Alignment, and Applications},
   pdfauthor={Cheng Yin},

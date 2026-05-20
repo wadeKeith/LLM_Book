@@ -19,6 +19,30 @@ A LLaMA-class block can be written as
 \end{align}
 This is still the residual-stream structure from Chapter~\ref{ch:transformer-mechanics}. The significance is in the defaults. RMSNorm changes normalization cost and behavior; RoPE changes where positions enter attention; SwiGLU changes MLP expressivity and parameter allocation; grouped-query attention changes the KV-cache budget. These are not cosmetic differences when training or serving billions of parameters.
 
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[node distance=6mm and 7mm]
+\node[llmblock, text width=2.2cm] (x) {Residual\\stream};
+\node[llmblock, right=of x, text width=2.0cm] (r1) {RMSNorm};
+\node[llmblock, right=of r1, text width=2.2cm] (rope) {RoPE on\\$Q,K$};
+\node[llmblock, right=of rope, text width=2.2cm] (gqa) {GQA\\attention};
+\node[llmblock, below=of gqa, text width=2.2cm] (r2) {RMSNorm};
+\node[llmblock, left=of r2, text width=2.2cm] (ffn) {SwiGLU\\or MoE FFN};
+\node[llmblock, left=of ffn, text width=2.2cm] (out) {Next residual\\stream};
+\draw[llmarrow] (x) -- (r1);
+\draw[llmarrow] (r1) -- (rope);
+\draw[llmarrow] (rope) -- (gqa);
+\draw[llmarrow] (gqa) -- (r2);
+\draw[llmarrow] (r2) -- (ffn);
+\draw[llmarrow] (ffn) -- (out);
+\draw[llmdash] (x.south) .. controls +(0,-1.0) and +(0,-1.0) .. node[below, font=\scriptsize] {residual} (gqa.south);
+\draw[llmdash] (gqa.west) .. controls +(-0.8,-1.0) and +(0.8,-1.0) .. node[below, font=\scriptsize] {residual} (out.east);
+\node[llmnote, below=8mm of ffn, text width=0.78\textwidth] {The LLaMA-class recipe is a set of coupled defaults. Changing GQA changes serving memory; changing RoPE changes long-context behavior; changing SwiGLU or MoE changes parameter allocation and communication.};
+\end{tikzpicture}
+\caption{A LLaMA-class decoder block as a contract among normalization, position handling, attention cache structure, and feed-forward capacity. The drawing abstracts from LLaMA, Llama 2/3, DeepSeek-V3, and Kimi K2-style reports without copying any released architecture figure.}
+\label{fig:llama-class-block}
+\end{figure}
+
 \section{RMSNorm and Pre-Normalization}
 \label{sec:llama-rmsnorm-prenorm}
 
@@ -148,6 +172,18 @@ For a book about \llms, the practical conclusion is conservative. These models a
 Architecture claims should be tested under matched training and serving budgets. Replacing LayerNorm with RMSNorm, GELU with SwiGLU, MHA with GQA, or absolute positions with RoPE changes parameter count, activation memory, cache memory, and often the optimal learning rate. A fair ablation controls for tokens, compute, data order, tokenizer, optimizer, and evaluation prompts as much as possible.
 
 Open model reports are valuable primary sources, but they are not interchangeable with independent replication. They often combine architecture changes with data improvements, post-training changes, filtering, safety tuning, and benchmark-specific evaluation choices. When a report attributes gains to an architecture, ask whether the evidence isolates that factor. When a deployment chooses a LLaMA-class model, evaluate the actual checkpoint and decoding path rather than relying on the family name.
+
+\section{Architectural Accounting}
+\label{sec:llama-architectural-accounting}
+
+For a dense decoder with $L$ layers, hidden width $d$, attention heads $H_q$, KV heads $H_{\mathrm{kv}}$, head dimension $d_h$, and SwiGLU width $m$, a rough per-layer parameter count is
+\begin{equation}
+  P_{\mathrm{layer}}
+  \approx
+  d(H_q d_h) + 2d(H_{\mathrm{kv}}d_h) + d(H_q d_h)
+  + 3dm,
+\end{equation}
+where the first four terms correspond to $W_Q$, $W_K$, $W_V$, and $W_O$, and the last term is the gated feed-forward network. This approximation ignores embeddings, norms, biases, and rounding, but it teaches the key lesson: GQA primarily reduces KV projections and serving cache, whereas the FFN often dominates dense parameters. In an MoE layer, $3dm$ should be replaced by the sum over experts for total parameters and by top-$k$ experts for active parameters. A publishable architecture section should always state which quantity it is reporting.
 
 \section{Key Terms}
 \label{sec:chapter-five-key-terms}

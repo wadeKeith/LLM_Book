@@ -23,6 +23,26 @@ where $m_t=1$ for response tokens to be imitated and $m_t=0$ for prompt tokens, 
 
 Instruction tuning became central because large base models already possess many latent capabilities, but they do not reliably infer the desired user-facing protocol from a raw prompt. FLAN-style work showed that fine-tuning on tasks expressed as natural-language instructions improves zero-shot generalization to unseen task types \cite{wei2021finetuned}. InstructGPT used supervised demonstrations as the first stage before reward modeling and \rlhf, making clear that SFT is useful but not a complete alignment method \cite{ouyang2022training}. Modern open model reports treat SFT as one component of a larger post-training pipeline with preference data, safety data, red-teaming, and deployment evaluation \cite{touvron2023llama2,dubey2024llama3}.
 
+\begin{figure}[t]
+\centering
+\resizebox{0.98\textwidth}{!}{%
+\begin{tikzpicture}[node distance=1.1cm and 1.35cm]
+\node[llmblock, text width=0.18\textwidth] (base) {Pretrained decoder\\next-token continuation};
+\node[llmblock, right=of base, text width=0.18\textwidth] (template) {Chat template\\roles, turns, stops};
+\node[llmblock, right=of template, text width=0.18\textwidth] (mask) {Masked SFT loss\\assistant spans only};
+\node[llmblock, right=of mask, text width=0.18\textwidth] (assistant) {Assistant interface\\format, refusal, tools};
+\draw[llmarrow] (base) -- (template);
+\draw[llmarrow] (template) -- (mask);
+\draw[llmarrow] (mask) -- (assistant);
+\node[llmnote, below=0.8cm of template, text width=0.62\textwidth] (audit) {A training record is complete only when serialization, label mask, data source, validation rule, and safety category are all recoverable from metadata.};
+\draw[llmdash] (audit.north) -- (template.south);
+\draw[llmdash] (audit.north east) -- (mask.south);
+\end{tikzpicture}
+}
+\caption{SFT changes the interface distribution rather than the causal language-model factorization. The engineering contract is the combination of template, masking, metadata, and validation, not merely a prompt-answer pair.}
+\label{fig:sft-interface-contract}
+\end{figure}
+
 \section{Instruction Data as a Contract}
 \label{sec:instruction-data-contract}
 
@@ -60,6 +80,14 @@ Human-written demonstrations are expensive. Synthetic instruction generation tri
 Synthetic data is attractive because it can cover many formats quickly. It can create paraphrases, edge cases, schema-specific examples, tool traces, or domain-style dialogues long before a human annotation program has reached the same breadth. It is also dangerous because errors scale with the generator. A teacher that fabricates facts, mishandles code, writes insecure SQL, or refuses too aggressively can stamp those mistakes into thousands of training examples. Filtering must therefore test both surface diversity and semantic validity.
 
 Modern synthetic-data pipelines are more than prompt expansion.\index{synthetic data}\index{distillation} Evol-Instruct-style methods deliberately rewrite seed tasks into harder variants \cite{xu2023wizardlm}; Orca-style distillation trains smaller models from richer teacher traces rather than only final answers \cite{mukherjee2023orca}; STaR-style bootstrapping keeps generated rationales that lead to correct answers and repeats the loop \cite{zelikman2022star}. Rejection sampling is the common control mechanism: sample many candidates, score them with unit tests, exact answers, retrieval support, reward models, or human audits, then train only on accepted examples. This turns data generation into a search problem, and it should be logged with the same care as model training: generator version, prompt template, sampling parameters, acceptance rules, rejection reasons, and overlap checks against benchmarks.
+
+One useful formalization is to treat synthetic data as a filtered proposal distribution. A teacher or generator samples candidates $e\sim q_\omega(e\mid s,\pi)$ from seed examples $s$ and a generation policy $\pi$. Validators $v_1,\ldots,v_K$ then define an accepted set
+\[
+  \mathcal{D}_{\mathrm{accept}}
+  =
+  \{e : v_k(e)=1 \ \text{for all required gates } k\}.
+\]
+The important modeling choice is not only $q_\omega$ but the gates. A code example without executable tests, a math example without a checked answer, or a safety example without near-neighbor contrast is weak supervision even if it is fluent.
 
 Distillation also changes what is being learned. A student can imitate the teacher's surface style without acquiring the teacher's latent competence; it can inherit the teacher's safety boundary; or it can become brittle because the accepted data contains only easy successes. For reasoning and tool use, the strongest synthetic records usually include the problem, context, tool observations or verifier results, the final answer, and a compact explanation of why the answer is valid. For safety-sensitive domains, teacher-generated examples require additional review because fluency can hide unsupported medical, legal, financial, or security claims.
 

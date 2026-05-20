@@ -130,12 +130,48 @@ FlashAttention improves exact attention by changing how the computation is tiled
 
 Efficient generation also depends on batching policy. Continuous batching improves device utilization by admitting new requests as others finish, but it complicates cache layout and stop handling. Prefix caching can reuse KV states for shared prompts, but it requires exact tokenizer and prompt-template equality. Quantized KV caches reduce memory but can affect long-context quality. These are serving-system choices, yet they feed back into model design through context length, number of KV heads, and tokenizer efficiency.
 
+\begin{figure}[t]
+\centering
+\resizebox{0.98\textwidth}{!}{%
+\begin{tikzpicture}[node distance=7mm and 7mm]
+\node[llmblock, text width=2.2cm] (prompt) {Serialized\\prompt};
+\node[llmblock, right=of prompt, text width=2.1cm] (prefill) {Prefill\\logits};
+\node[llmblock, right=of prefill, text width=2.1cm] (sample) {Sample or\\constrain};
+\node[llmblock, right=of sample, text width=2.1cm] (append) {Append\\token};
+\node[llmblock, below=of append, text width=2.1cm] (stop) {Stop or\\continue};
+\node[llmblock, left=of stop, text width=2.1cm] (cache) {Update\\KV cache};
+\draw[llmarrow] (prompt) -- (prefill);
+\draw[llmarrow] (prefill) -- (sample);
+\draw[llmarrow] (sample) -- (append);
+\draw[llmarrow] (append) -- (stop);
+\draw[llmarrow] (stop) -- node[below, font=\scriptsize] {continue} (cache);
+\draw[llmarrow] (cache) -| (sample);
+\draw[llmdash] (stop.east) -- ++(1.1,0) node[right, font=\scriptsize] {final response};
+\node[llmnote, below=8mm of sample, text width=0.78\textwidth] {Generation is a state machine. Sampling parameters, schema constraints, stop rules, stream callbacks, cancellation, safety filters, and cache updates must be ordered explicitly.};
+\end{tikzpicture}
+}
+\caption{A GPT-style generation loop. The loop is mathematically simple but operationally rich: every token updates model state, user-visible stream state, and service resources.}
+\label{fig:gpt-generation-loop}
+\end{figure}
+
 \section{Evaluation Cautions}
 \label{sec:gpt-evaluation-cautions}
 
 GPT evaluation should separate loss, decoding behavior, and task accuracy. Loss is measured under teacher forcing; generation is measured under the model's own sampled prefixes. A model can have lower loss and worse open-ended samples if decoding is poorly chosen. A model can score well on a benchmark and fail in deployment if the benchmark is contaminated, too narrow, or unlike user prompts. A decoding configuration can improve a demo while reducing factuality or calibration.
 
 Report the tokenizer, context length, prompt format, decoding settings, number of samples, random seeds when relevant, and exact metric. For stochastic decoding, a single sample is a weak estimate. For pass-at-$k$ style coding or reasoning metrics, increasing $k$ spends more inference compute and should not be compared directly with a single-sample result unless that is the intended product budget.
+
+\section{Interface Contracts for Chat Models}
+\label{sec:gpt-interface-contracts}
+
+Chat models are often described as if the only difference from a base decoder were additional instruction data. Operationally, the difference is a contract between tokenizer, template, loss mask, decoding policy, and runtime. If a conversation is serialized as
+\begin{equation}
+  s = \langle \mathrm{system}\rangle u_0
+      \langle \mathrm{user}\rangle u_1
+      \langle \mathrm{assistant}\rangle a_1
+      \cdots,
+\end{equation}
+then training must define which spans are labels, which spans are conditioning context, which spans are tool observations, and which token sequences terminate a message. This contract should be tested like an API. A model can lose capability simply because the training template and serving template disagree about a role marker or end-of-message token.
 
 \section{Key Terms}
 \label{sec:chapter-four-key-terms}

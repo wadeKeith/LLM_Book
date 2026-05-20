@@ -74,6 +74,24 @@ instead of $d_{\mathrm{in}}d_{\mathrm{out}}$. For square matrices with width $d$
 
 The initialization is part of the method. A typical implementation initializes one low-rank factor randomly and the other to zero so that $\Delta W=0$ at the start of training. The initial model is exactly the base model, and adaptation begins as a learned residual update. LoRA dropout can be applied on the adapter path, and the base weight remains frozen.
 
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[node distance=1.0cm and 1.1cm]
+\node[llmblock, text width=0.19\textwidth] (input) {hidden state\\$h$};
+\node[llmblock, right=of input, text width=0.21\textwidth] (base) {frozen path\\$W_0 h$};
+\node[llmblock, below=of base, text width=0.21\textwidth] (lora) {low-rank path\\$\frac{\alpha}{r}BAh$};
+\node[llmblock, right=1.35cm of base, text width=0.22\textwidth] (sum) {adapted output\\$(W_0+\Delta W)h$};
+\node[llmnote, right=1.0cm of lora, text width=0.22\textwidth] (ops) {Unmerged serving keeps adapter ids dynamic; merged serving restores dense inference but creates a new checkpoint artifact.};
+\draw[llmarrow] (input) -- (base);
+\draw[llmarrow] (input.south east) |- (lora.west);
+\draw[llmarrow] (base) -- (sum);
+\draw[llmarrow] (lora.east) -| (sum.south);
+\draw[llmdash] (lora) -- (ops);
+\end{tikzpicture}
+\caption{LoRA adds a trainable low-rank residual to selected frozen matrices. The same learned update has different operational consequences depending on whether it is kept as an adapter or merged into the base weight.}
+\label{fig:lora-low-rank-path}
+\end{figure}
+
 LoRA can target different matrices. Attention projections are common: query, key, value, and output projections each control different aspects of attention behavior. Many instruction-tuning recipes target query and value projections only for lower cost; stronger adaptation often also targets key, output, and feed-forward projections. There is no universal best target set. Code tasks, multilingual adaptation, and structured generation may benefit from broader targets; a small style adapter may not.
 
 Merging is a practical advantage. At inference time one can compute $W_{\mathrm{merged}}=W_0+(\alpha/r)BA$ and serve the model as an ordinary dense model, provided the precision and deployment policy allow the merge. This removes adapter matmul overhead. Keeping adapters unmerged allows dynamic swapping, multi-tenant serving, and combining adapters, but it requires runtime adapter management. Multiple adapters can be added as sums of low-rank updates only when their target matrices, scaling, and licensing constraints are compatible; empirical interference still has to be tested.
@@ -126,6 +144,23 @@ Finally, PEFT does not remove the need for data security. An adapter can memoriz
 A PEFT report should include four classes of metrics. First, task metrics measure the reason for adaptation: exact match, execution accuracy, pass rate, retrieval-grounded answer quality, or human preference. Second, regression metrics measure what should not have changed: general chat quality, multilingual behavior, math, code, safety, and calibration. Third, systems metrics measure whether PEFT achieved the intended efficiency: trainable parameters, peak memory, training time, checkpoint size, tokens per second, and serving latency. Fourth, robustness metrics test sensitivity to prompt paraphrases, longer contexts, unseen schemas, and adversarial examples.
 
 Comparisons must be fair. A LoRA model trained for 10,000 target tokens should not be compared to a full fine-tune trained for 10 million target tokens without accounting for data. A QLoRA run should not be declared equivalent to full fine-tuning because one benchmark matches. A prompt-tuned model should not be penalized for consuming context length unless the deployment actually has a tight context budget. The question is not which PEFT method is globally best; it is which method gives enough adaptation under the memory, latency, storage, and governance constraints of the application.
+
+\begin{table}[t]
+\caption{Example LoRA parameter counts for one square projection with width $d=4096$.}
+\label{tab:lora-rank-accounting}
+\small
+\centering
+\begin{tabular}{@{}rrrr@{}}
+\hline\noalign{\smallskip}
+Rank $r$ & LoRA parameters $2rd$ & Full matrix parameters $d^2$ & Fraction \\
+\noalign{\smallskip}\svhline\noalign{\smallskip}
+4  & 32{,}768   & 16{,}777{,}216 & 0.20\% \\
+8  & 65{,}536   & 16{,}777{,}216 & 0.39\% \\
+16 & 131{,}072  & 16{,}777{,}216 & 0.78\% \\
+64 & 524{,}288  & 16{,}777{,}216 & 3.12\% \\
+\noalign{\smallskip}\hline
+\end{tabular}
+\end{table}
 
 \section{Key Terms}
 \label{sec:peft-key-terms}

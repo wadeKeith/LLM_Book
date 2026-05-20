@@ -15,12 +15,27 @@ Every standard \transformer block preserves this outer shape. Attention mixes in
 The original \transformer combined self-attention, feed-forward sublayers, residual connections, and layer normalization into an architecture that parallelizes over sequence positions far more effectively than recurrent networks \cite{vaswani2017attention}.\index{Transformer}\index{self-attention}\index{residual stream} Modern language models adjust many details, but they keep the same central invariant: the model maintains a residual stream and repeatedly applies content-dependent mixing followed by tokenwise nonlinear transformation.
 
 \begin{figure}[t]
-\fbox{\begin{minipage}{0.92\textwidth}
 \centering
-tokens $\rightarrow$ embeddings and positions $\rightarrow$
-[norm $\rightarrow$ attention $\rightarrow$ residual $\rightarrow$ norm $\rightarrow$ MLP $\rightarrow$ residual] $\times L$
-$\rightarrow$ logits or task head
-\end{minipage}}
+\begin{tikzpicture}[node distance=6mm and 8mm]
+\node[llmblock, text width=2.0cm] (x) {$X$\\$B\times T\times d$};
+\node[llmblock, right=of x, text width=2.0cm] (n1) {Norm};
+\node[llmblock, right=of n1, text width=2.3cm] (attn) {Multi-head\\attention};
+\node[llmblock, right=of attn, text width=2.1cm] (add1) {Residual\\add};
+\node[llmblock, below=of add1, text width=2.0cm] (n2) {Norm};
+\node[llmblock, left=of n2, text width=2.2cm] (mlp) {Tokenwise\\MLP};
+\node[llmblock, left=of mlp, text width=2.1cm] (add2) {Residual\\add};
+\node[llmblock, left=of add2, text width=2.0cm] (z) {$Z$\\$B\times T\times d$};
+\draw[llmarrow] (x) -- (n1);
+\draw[llmarrow] (n1) -- (attn);
+\draw[llmarrow] (attn) -- (add1);
+\draw[llmarrow] (add1) -- (n2);
+\draw[llmarrow] (n2) -- (mlp);
+\draw[llmarrow] (mlp) -- (add2);
+\draw[llmarrow] (add2) -- (z);
+\draw[llmdash] (x.south) .. controls +(0,-1.0) and +(0,-1.0) .. node[below, font=\scriptsize] {skip path} (add1.south);
+\draw[llmdash] (add1.west) .. controls +(-0.7,-0.9) and +(0.7,-0.9) .. node[below, font=\scriptsize] {skip path} (add2.east);
+\node[llmnote, below=8mm of mlp, text width=0.78\textwidth] {The outer tensor shape is invariant. Attention changes how positions exchange information; the MLP changes each position's representation; residual paths preserve a stable route for activations and gradients.};
+\end{tikzpicture}
 \caption{A shape-preserving view of the \transformer block. The attention sublayer changes which positions can exchange information; the MLP changes each position's representation; residual addition keeps a stable path through depth.}
 \label{fig:transformer-shape-preserving}
 \end{figure}
@@ -152,6 +167,18 @@ Softmax rows & Every unmasked query has at least one allowed key & \texttt{nan} 
 \end{table}
 
 Attention weights are useful diagnostics but weak explanations. A head that attends to a token does not prove that the token caused the output, because later layers, value projections, residual paths, and MLPs can transform or erase that information. Evaluation of a \transformer should therefore combine mechanistic inspection with controlled interventions, held-out loss, downstream tasks, and generation behavior.
+
+\section{From Diagram to Tests}
+\label{sec:transformer-diagram-to-tests}
+
+The block diagram becomes useful only when it is turned into tests. A high-quality implementation should compare prefill and incremental decoding on the same prefix, assert that logits are invariant under harmless padding, and verify that a single-token continuation uses the same RoPE position as the corresponding full-context computation. Let $f_{\theta}^{\mathrm{full}}(x_{1:T})$ be logits from a full forward pass and $f_{\theta}^{\mathrm{cache}}(x_{1:T})$ be logits from cached token-by-token decoding. Before numerical tolerances from fused kernels are considered, a decoder implementation should satisfy
+\begin{equation}
+  \max_{t\leq T}\,
+  \left\|f_{\theta}^{\mathrm{full}}(x_{1:t}) -
+  f_{\theta}^{\mathrm{cache}}(x_{1:t})\right\|_{\infty}
+  \approx 0.
+\end{equation}
+When this check fails, the cause is often not attention theory but a position-id, mask, dtype, or cache-layout mismatch. This is why the book emphasizes tensor contracts before architectural folklore.
 
 \section{Key Terms}
 \label{sec:chapter-three-key-terms}
