@@ -29,7 +29,7 @@ The central caution is that longer reasoning text is not the same as faithful re
 \draw[llmarrow] (sample) -- (verify);
 \draw[llmarrow] (tool) -- (verify);
 \draw[llmarrow] (verify) -- (answer);
-\node[llmnote, below=9mm of verify, text width=0.78\textwidth] {Test-time compute is a budget allocation problem. More tokens, samples, branches, and tools are useful only when the controller and verifier improve correctness faster than they increase cost and risk.};
+\node[llmnote, below=10mm of tool, text width=0.76\textwidth] {Test-time compute is a budget allocation problem. More tokens, samples, branches, and tools are useful only when the controller and verifier improve correctness faster than they increase cost and risk.};
 \end{tikzpicture}
 }
 \caption{Reasoning as adaptive test-time compute. The abstraction covers chain-of-thought, self-consistency, verifier selection, tool use, and routing in recent reasoning systems \cite{deepseek2025r1,snell2024scaling,yang2025testtime}.}

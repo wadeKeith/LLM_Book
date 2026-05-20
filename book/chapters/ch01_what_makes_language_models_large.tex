@@ -55,7 +55,7 @@ This book treats an \llm as a stack rather than as a single neural network. The 
 \draw[llmarrow] (post) -- (serve);
 \draw[llmarrow] (serve) -- (eval);
 \draw[llmdash] (eval.north) .. controls +(0,1.0) and +(0,-1.0) .. node[left, font=\scriptsize, align=center] {audit\\feedback} (data.south);
-\node[llmnote, below=8mm of tok, text width=0.74\textwidth] (note) {A model release is a chain of contracts, not a checkpoint alone. Each layer inherits upstream assumptions and adds new failure modes: licensing and contamination in data, token efficiency in the tokenizer, numerical stability in training, behavioral shifts in post-training, and latency or policy failures in deployment.};
+\node[llmnote, below=9mm of serve, text width=0.74\textwidth] (note) {A model release is a chain of contracts, not a checkpoint alone. Each layer inherits upstream assumptions and adds new failure modes: licensing and contamination in data, token efficiency in the tokenizer, numerical stability in training, behavioral shifts in post-training, and latency or policy failures in deployment.};
 \end{tikzpicture}
 \caption{The lifecycle stack used throughout the book. Each arrow represents a contract: the next layer inherits the assumptions, artifacts, and failure modes of the previous layer. The dashed loop emphasizes that evaluation and deployment incidents should feed back into data, training, and release practice rather than remain a final report.}
 \label{fig:llm-lifecycle-stack}

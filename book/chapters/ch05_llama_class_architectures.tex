@@ -21,24 +21,30 @@ This is still the residual-stream structure from Chapter~\ref{ch:transformer-mec
 
 \begin{figure}[t]
 \centering
-\begin{tikzpicture}[node distance=6mm and 7mm]
-\node[llmblock, text width=2.2cm] (x) {Residual\\stream};
+\resizebox{0.98\textwidth}{!}{%
+\begin{tikzpicture}[node distance=7mm and 8mm]
+\node[llmblock, text width=2.1cm] (x) {Residual\\stream};
 \node[llmblock, right=of x, text width=2.0cm] (r1) {RMSNorm};
 \node[llmblock, right=of r1, text width=2.2cm] (rope) {RoPE on\\$Q,K$};
 \node[llmblock, right=of rope, text width=2.2cm] (gqa) {GQA\\attention};
-\node[llmblock, below=of gqa, text width=2.2cm] (r2) {RMSNorm};
-\node[llmblock, left=of r2, text width=2.2cm] (ffn) {SwiGLU\\or MoE FFN};
-\node[llmblock, left=of ffn, text width=2.2cm] (out) {Next residual\\stream};
+\node[llmblock, right=of gqa, text width=2.1cm] (y) {Post-attn\\stream};
+\node[llmblock, below=13mm of x, text width=2.1cm] (y2) {Post-attn\\stream};
+\node[llmblock, right=of y2, text width=2.0cm] (r2) {RMSNorm};
+\node[llmblock, right=of r2, text width=2.2cm] (ffn) {SwiGLU\\or MoE FFN};
+\node[llmblock, right=of ffn, text width=2.1cm] (out) {Next residual\\stream};
 \draw[llmarrow] (x) -- (r1);
 \draw[llmarrow] (r1) -- (rope);
 \draw[llmarrow] (rope) -- (gqa);
-\draw[llmarrow] (gqa) -- (r2);
+\draw[llmarrow] (gqa) -- (y);
+\draw[llmarrow] (y.south) -- (y2.north);
+\draw[llmarrow] (y2) -- (r2);
 \draw[llmarrow] (r2) -- (ffn);
 \draw[llmarrow] (ffn) -- (out);
-\draw[llmdash] (x.south) .. controls +(0,-1.0) and +(0,-1.0) .. node[below, font=\scriptsize] {residual} (gqa.south);
-\draw[llmdash] (gqa.west) .. controls +(-0.8,-1.0) and +(0.8,-1.0) .. node[below, font=\scriptsize] {residual} (out.east);
-\node[llmnote, below=8mm of ffn, text width=0.78\textwidth] {The LLaMA-class recipe is a set of coupled defaults. Changing GQA changes serving memory; changing RoPE changes long-context behavior; changing SwiGLU or MoE changes parameter allocation and communication.};
+\draw[llmdash] (x.north) .. controls +(0,0.85) and +(0,0.85) .. (y.north);
+\draw[llmdash] (y2.south) .. controls +(0,-0.85) and +(0,-0.85) .. (out.south);
+\node[llmnote, below=8mm of ffn, text width=0.70\textwidth] {The LLaMA-class recipe is a set of coupled defaults. Changing GQA changes serving memory; changing RoPE changes long-context behavior; changing SwiGLU or MoE changes parameter allocation and communication.};
 \end{tikzpicture}
+}
 \caption{A LLaMA-class decoder block as a contract among normalization, position handling, attention cache structure, and feed-forward capacity. The drawing abstracts from LLaMA, Llama 2/3, DeepSeek-V3, and Kimi K2-style reports without copying any released architecture figure.}
 \label{fig:llama-class-block}
 \end{figure}
