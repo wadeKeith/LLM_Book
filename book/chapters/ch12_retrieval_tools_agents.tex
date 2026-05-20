@@ -193,12 +193,12 @@ Agentic systems need a boundary diagram because the model is only one actor. The
 \node[llmblock, below=of tool, text width=2.2cm] (obs) {Observation};
 \node[llmblock, left=of obs, text width=2.2cm] (audit) {Audit log\\and budget};
 \draw[llmarrow] (state) -- (model);
-\draw[llmarrow] (model) -- node[above, font=\scriptsize] {proposed call} (runtime);
-\draw[llmarrow] (runtime) -- node[above, font=\scriptsize] {authorized call} (tool);
+\draw[llmarrow] (model) -- node[above, font=\scriptsize, fill=white, inner sep=1pt] {proposed call} (runtime);
+\draw[llmarrow] (runtime) -- node[above, font=\scriptsize, fill=white, inner sep=1pt] {authorized call} (tool);
 \draw[llmarrow] (tool) -- (obs);
 \draw[llmarrow] (obs) -- (audit);
 \draw[llmarrow] (audit) -| (state);
-\draw[llmdash] (runtime.south) -- node[right, font=\scriptsize] {deny / repair} (audit.north);
+\draw[llmdash] (runtime.south) -- node[right, font=\scriptsize, fill=white, inner sep=1pt] {deny / repair} (audit.north);
 \end{tikzpicture}
 \caption{A tool-using agent runtime. The model proposes actions, but the runtime owns authority, permissions, sandboxing, logging, and budget enforcement.}
 \label{fig:agent-runtime-boundary}
