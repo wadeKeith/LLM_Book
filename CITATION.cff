@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use this book, please cite it as below."
+type: book
+title: "Large Language and Generative Foundation Models: Foundations, Systems, Alignment, and Applications"
+authors:
+  - family-names: Yin
+    given-names: Cheng
+version: "2026.06.14"
+date-released: "2026-06-14"
+url: "https://wadekeith.github.io/LLM_Book/"
+repository-code: "https://github.com/wadeKeith/LLM_Book"
+abstract: "A bilingual book on large language models and generative foundation models, covering foundations, training systems, alignment, retrieval, reasoning, multimodal systems, evaluation, governance, and research practice."
+keywords:
+  - large language models
+  - generative foundation models
+  - transformers
+  - alignment
+  - retrieval
+  - reasoning
+  - multimodal AI
+  - evaluation
+  - governance

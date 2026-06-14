@@ -10,7 +10,7 @@ This inventory records the file classes intentionally present in the release wor
 
 | File class | Patterns | Publication role |
 | --- | --- | --- |
-| Release instructions and repository controls | `.gitignore`, `.nojekyll`, `Makefile`, `README.md` | Local build, audit, cleanup, Pages routing, and release instructions |
+| Release instructions and repository controls | `.gitignore`, `.nojekyll`, `CITATION.cff`, `Makefile`, `README.md` | Local build, audit, cleanup, Pages routing, citation metadata, and release instructions |
 | Publication website assets | `index.html`, `assets/site.css`, `assets/*.png` | Static GitHub Pages landing page and current PDF cover previews |
 | Springer template package | `SNmono.cls`, `book/SNmono.cls`, `book/*.bst`, `book/svind*.ist`, `history.txt`, `readme.txt`, `instructions.pdf` | Publisher-supplied class, bibliography/index styles, and template documentation |
 | English and Chinese manuscript sources | `book/*.tex`, `book/chapters/ch*.tex`, `book/references.bib` | Editable manuscript, front/back matter, chapters, and bibliography |

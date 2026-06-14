@@ -209,7 +209,7 @@ The latest citation check found 294 unique cited keys, 294 bibliography entries,
 
 The latest repository-hygiene check inspected 10 release/template files, 19 required `.gitignore` patterns, root build configuration, and README release instructions, with no drift or missing-file failures.
 
-The latest release-inventory check inventoried 117 release files across 7 documented file classes, ignored build/private files, and found no uninventoried non-build files or undocumented external asset classes. The ignored-file count is intentionally not pinned because LaTeX side files and Python caches are transient release-build artifacts.
+The latest release-inventory check inventoried 119 release files across 7 documented file classes, ignored build/private files, and found no uninventoried non-build files or undocumented external asset classes. The ignored-file count is intentionally not pinned because LaTeX side files and Python caches are transient release-build artifacts.
 
 The latest source-inventory check inventoried 1,565 regular source-root files outside `LLM_Book`, including 207 MP4 files, 64 PDF files, 20 PPTX slide decks, 476 Python files, 51 notebooks, 80 Markdown files, and 96 text files. It found 703 provenance-readable text/code files under the automated suffix and size policy, plus 0 readable files over the provenance-scan size cap.
 

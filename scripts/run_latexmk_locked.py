@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import fcntl
 import hashlib
+import os
 import subprocess
 import sys
 import tempfile
@@ -16,6 +17,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+RELEASE_SOURCE_DATE_EPOCH = "1781395200"
 
 
 def lock_path() -> Path:
@@ -33,10 +35,15 @@ def main(argv: list[str]) -> int:
 
     workdir = Path(argv[1])
     command = argv[2:]
+    env = os.environ.copy()
+    env.setdefault("SOURCE_DATE_EPOCH", RELEASE_SOURCE_DATE_EPOCH)
+    env.setdefault("FORCE_SOURCE_DATE", "1")
+    env.setdefault("SOURCE_DATE_EPOCH_TEX_PRIMITIVES", "1")
+    env.setdefault("TZ", "UTC")
 
     with lock_path().open("w", encoding="utf-8") as lock_file:
         fcntl.flock(lock_file, fcntl.LOCK_EX)
-        return subprocess.run(command, cwd=workdir).returncode
+        return subprocess.run(command, cwd=workdir, env=env).returncode
 
 
 if __name__ == "__main__":
