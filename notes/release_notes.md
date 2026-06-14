@@ -47,12 +47,12 @@ The full release-candidate target includes source, PDF, bibliography, layout, vi
 
 ## Publication Path
 
-1. Merge the release PR into `main`.
-2. Choose and add a license or explicit reuse statement.
-3. Make the repository public if the release should be publicly archived through GitHub Pages and Zenodo.
-4. Enable GitHub Pages from the `main` branch root.
+1. Merge the release PR into `main`. Done: `main` currently contains the release files.
+2. Enable GitHub Pages from the `main` branch root. Done: GitHub reports Pages source `main` `/` at `http://yincheng429.cn/LLM_Book/`.
+3. Choose and add a license or explicit reuse statement.
+4. Make the repository public if the release should be publicly archived through GitHub Pages and Zenodo.
 5. Enable the repository in Zenodo's GitHub integration.
-6. Create the GitHub release from tag `v2026.06.14` and attach both PDFs.
+6. Create or publish the GitHub release from tag `v2026.06.14` and attach both PDFs.
 7. After Zenodo mints the DOI, update `CITATION.cff`, `index.html`, and this note with the DOI.
 8. Create or update the OSF project, upload or link the release artifacts, add the Zenodo DOI, and make the OSF project public when ready.
 
