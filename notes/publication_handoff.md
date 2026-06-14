@@ -12,10 +12,10 @@ This note records the remaining account-side actions for publishing the current 
 - Default branch: `main`
 - GitHub Pages: `http://yincheng429.cn/LLM_Book/`
 - Pages source: `main` branch root
-- Release draft: `v2026.06.14`
-- Release status: draft, not yet published
-- Zenodo GitHub integration: pending; GitHub currently reports `0` repository webhooks
-- Zenodo DOI: pending
+- GitHub release: `https://github.com/wadeKeith/LLM_Book/releases/tag/v2026.06.14`
+- Release status: published
+- Zenodo GitHub integration: active; GitHub hook id `641530522`
+- Zenodo DOI: `https://doi.org/10.5281/zenodo.20691216`
 - OSF mirror: pending
 
 ## Release Metadata
@@ -59,31 +59,19 @@ A bilingual book on large language models and generative foundation models, cove
 
 ## Remaining Publication Steps
 
-1. In Zenodo, connect the GitHub account if it is not already connected.
-2. In Zenodo's GitHub repository list, sync repositories and enable `wadeKeith/LLM_Book`.
-3. Re-run `make publication-readiness`.
-4. Confirm `Zenodo GitHub integration` is `READY` or verify the repository is enabled in the Zenodo dashboard.
-5. Dry-run the guarded release publisher: `python3 scripts/publish_release_after_zenodo.py`.
-6. Publish the existing GitHub draft release `v2026.06.14`: `make publish-release-after-zenodo`.
-   If Zenodo is enabled in the dashboard but no hook is visible through the GitHub hooks API, run `python3 scripts/publish_release_after_zenodo.py --zenodo-dashboard-verified --publish` instead.
-7. Wait for Zenodo to ingest the release and create the record.
-8. Complete any required Zenodo metadata fields and publish the Zenodo record.
-9. Copy the version DOI issued by Zenodo.
-10. Backfill the DOI into release files:
-    `make backfill-archive-links DOI="10.5281/zenodo.<record>"`
-11. Create or update the OSF project.
-12. Add the GitHub Pages URL, GitHub release URL, Zenodo DOI, and both PDF artifacts or archival links to OSF.
-13. Make the OSF project public.
-14. Backfill the public OSF URL:
+1. Create or update the OSF project.
+2. Add the GitHub Pages URL, GitHub release URL, Zenodo DOI, and both PDF artifacts or archival links to OSF.
+3. Make the OSF project public.
+4. Backfill the public OSF URL:
     `make backfill-archive-links DOI="10.5281/zenodo.<record>" OSF_URL="https://osf.io/<project>/"`
-15. Re-run `make publication-readiness` and confirm no pending items remain.
+5. Re-run `make publication-readiness` and confirm no pending items remain.
 
 ## DOI Backfill Targets
 
-- `CITATION.cff`: add a top-level `doi: "10.5281/zenodo.<record>"`
-- `index.html`: add the DOI and Zenodo link in the citation/publication area
-- `notes/release_notes.md`: replace the pending DOI note with the minted DOI
-- `notes/publication_handoff.md`: replace the pending DOI note with the minted DOI
+- `CITATION.cff`: top-level `doi: "10.5281/zenodo.20691216"`
+- `index.html`: DOI and Zenodo link recorded as `https://doi.org/10.5281/zenodo.20691216`
+- `notes/release_notes.md`: DOI recorded as `https://doi.org/10.5281/zenodo.20691216`
+- `notes/publication_handoff.md`: DOI recorded as `https://doi.org/10.5281/zenodo.20691216`
 
 ## OSF Backfill Targets
 
