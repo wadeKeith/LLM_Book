@@ -266,7 +266,12 @@ def github_release_result() -> CheckResult:
 def zenodo_result() -> CheckResult:
     text = "\n".join(
         path.read_text(encoding="utf-8", errors="ignore")
-        for path in (ROOT / "CITATION.cff", ROOT / "index.html", ROOT / "notes" / "release_notes.md")
+        for path in (
+            ROOT / "CITATION.cff",
+            ROOT / "index.html",
+            ROOT / "notes" / "release_notes.md",
+            ROOT / "notes" / "publication_handoff.md",
+        )
     )
     doi_matches = sorted(set(re.findall(r"10\.5281/zenodo\.\d+", text)))
     if doi_matches:
@@ -282,7 +287,11 @@ def zenodo_result() -> CheckResult:
 def osf_result() -> CheckResult:
     text = "\n".join(
         path.read_text(encoding="utf-8", errors="ignore")
-        for path in (ROOT / "index.html", ROOT / "notes" / "release_notes.md")
+        for path in (
+            ROOT / "index.html",
+            ROOT / "notes" / "release_notes.md",
+            ROOT / "notes" / "publication_handoff.md",
+        )
     )
     osf_matches = sorted(set(re.findall(r"https://osf\.io/[A-Za-z0-9_-]+/?", text)))
     if osf_matches:

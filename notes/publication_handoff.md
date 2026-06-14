@@ -69,11 +69,14 @@ A bilingual book on large language models and generative foundation models, cove
 7. Wait for Zenodo to ingest the release and create the record.
 8. Complete any required Zenodo metadata fields and publish the Zenodo record.
 9. Copy the version DOI issued by Zenodo.
-10. Update `CITATION.cff`, `index.html`, `notes/release_notes.md`, and this file with the DOI.
+10. Backfill the DOI into release files:
+    `make backfill-archive-links DOI="10.5281/zenodo.<record>"`
 11. Create or update the OSF project.
 12. Add the GitHub Pages URL, GitHub release URL, Zenodo DOI, and both PDF artifacts or archival links to OSF.
 13. Make the OSF project public.
-14. Re-run `make publication-readiness` and confirm no pending items remain.
+14. Backfill the public OSF URL:
+    `make backfill-archive-links DOI="10.5281/zenodo.<record>" OSF_URL="https://osf.io/<project>/"`
+15. Re-run `make publication-readiness` and confirm no pending items remain.
 
 ## DOI Backfill Targets
 
