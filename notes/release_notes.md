@@ -37,6 +37,7 @@ The English PDF has 238 pages. The Chinese PDF has 308 pages. The bibliography c
 The release candidate passed:
 
 - `make release-candidate`
+- `make publication-readiness` with expected pending owner/account-side publication items
 - strict local secret-pattern scan
 - static GitHub Pages desktop and mobile rendering checks
 - post-clean release-inventory check

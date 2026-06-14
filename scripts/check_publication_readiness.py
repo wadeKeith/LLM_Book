@@ -1,0 +1,250 @@
+#!/usr/bin/env python3
+"""Report external publication readiness for Pages, Release, DOI, and OSF."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+REPO = "wadeKeith/LLM_Book"
+EXPECTED_TAG = "v2026.06.14"
+EXPECTED_PAGES_URL = "https://wadekeith.github.io/LLM_Book/"
+REQUIRED_FILES = (
+    "index.html",
+    ".nojekyll",
+    "CITATION.cff",
+    "notes/release_notes.md",
+    "book/book.pdf",
+    "book/book_zh.pdf",
+)
+LICENSE_FILES = ("LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING", "COPYING.md")
+
+
+@dataclass(frozen=True)
+class CheckResult:
+    name: str
+    status: str
+    detail: str
+
+
+def rel(path: Path) -> str:
+    return path.relative_to(ROOT).as_posix()
+
+
+def run(command: list[str]) -> tuple[int, str, str]:
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        return 127, "", str(exc)
+    return completed.returncode, completed.stdout.strip(), completed.stderr.strip()
+
+
+def result(name: str, ok: bool, detail: str, pending: bool = False) -> CheckResult:
+    status = "READY" if ok else ("PENDING" if pending else "MISSING")
+    return CheckResult(name, status, detail)
+
+
+def required_file_results() -> list[CheckResult]:
+    results: list[CheckResult] = []
+    for relative in REQUIRED_FILES:
+        path = ROOT / relative
+        ok = path.is_file() and path.stat().st_size > 0
+        detail = "present" if ok else "missing or empty"
+        results.append(result(f"required file: {relative}", ok, detail))
+    return results
+
+
+def license_result() -> CheckResult:
+    present = [name for name in LICENSE_FILES if (ROOT / name).is_file()]
+    if present:
+        return result("license/reuse statement", True, ", ".join(present))
+    return result(
+        "license/reuse statement",
+        False,
+        "no root LICENSE/COPYING file found; owner must choose reuse terms before public release",
+        pending=True,
+    )
+
+
+def citation_result() -> CheckResult:
+    text = (ROOT / "CITATION.cff").read_text(encoding="utf-8")
+    required = [
+        "cff-version: 1.2.0",
+        "type: book",
+        "date-released: \"2026-06-14\"",
+        f"url: \"{EXPECTED_PAGES_URL}\"",
+        f"repository-code: \"https://github.com/{REPO}\"",
+    ]
+    missing = [snippet for snippet in required if snippet not in text]
+    if missing:
+        return result("citation metadata", False, "missing snippets: " + "; ".join(missing))
+    if re.search(r"(?m)^doi:", text):
+        return result("citation metadata", True, "CITATION.cff has release metadata and DOI")
+    return result(
+        "citation metadata",
+        True,
+        "CITATION.cff is present; DOI field intentionally pending until Zenodo mints one",
+    )
+
+
+def release_notes_result() -> CheckResult:
+    text = (ROOT / "notes" / "release_notes.md").read_text(encoding="utf-8")
+    required = [
+        "Version: 2026.06.14",
+        "book/book.pdf",
+        "book/book_zh.pdf",
+        "4e0204492b461f06b9c0c6bf72e0b125ac836a9acfc522fbf730399f1b71c92a",
+        "68909d699cb9ab1a31f1c5eed796294e7d0da474e26f2f563bd0752b7d0b4fff",
+        "GitHub Release Body Draft",
+    ]
+    missing = [snippet for snippet in required if snippet not in text]
+    return result(
+        "release notes",
+        not missing,
+        "ready" if not missing else "missing snippets: " + "; ".join(missing),
+    )
+
+
+def repo_visibility_result() -> CheckResult:
+    code, stdout, stderr = run(["gh", "repo", "view", REPO, "--json", "visibility,defaultBranchRef"])
+    if code != 0:
+        return result("GitHub repository visibility", False, stderr or "gh repo view failed", pending=True)
+    payload = json.loads(stdout)
+    visibility = payload.get("visibility", "")
+    default_branch = (payload.get("defaultBranchRef") or {}).get("name", "")
+    ok = visibility == "PUBLIC" and default_branch == "main"
+    detail = f"visibility={visibility}, default_branch={default_branch}"
+    return result("GitHub repository visibility", ok, detail, pending=not ok)
+
+
+def pages_result() -> CheckResult:
+    code, stdout, stderr = run(["gh", "api", f"repos/{REPO}/pages"])
+    if code != 0:
+        return result("GitHub Pages site", False, stderr or "Pages API unavailable", pending=True)
+    payload = json.loads(stdout)
+    html_url = payload.get("html_url", "")
+    status = payload.get("status", "")
+    source = payload.get("source") or {}
+    ok = html_url.rstrip("/") == EXPECTED_PAGES_URL.rstrip("/") and source.get("branch") == "main"
+    detail = f"url={html_url or 'unknown'}, status={status or 'unknown'}, source={source}"
+    return result("GitHub Pages site", ok, detail, pending=not ok)
+
+
+def github_release_result() -> CheckResult:
+    code, stdout, stderr = run(
+        [
+            "gh",
+            "release",
+            "view",
+            EXPECTED_TAG,
+            "--repo",
+            REPO,
+            "--json",
+            "tagName,isDraft,isPrerelease,url,assets",
+        ]
+    )
+    if code != 0:
+        return result("GitHub Release", False, stderr or f"{EXPECTED_TAG} not found", pending=True)
+    payload = json.loads(stdout)
+    assets = {asset.get("name") for asset in payload.get("assets", [])}
+    required_assets = {"book.pdf", "book_zh.pdf"}
+    ok = (
+        payload.get("tagName") == EXPECTED_TAG
+        and not payload.get("isDraft")
+        and required_assets.issubset(assets)
+    )
+    detail = f"tag={payload.get('tagName')}, draft={payload.get('isDraft')}, assets={sorted(assets)}"
+    return result("GitHub Release", ok, detail, pending=not ok)
+
+
+def zenodo_result() -> CheckResult:
+    text = "\n".join(
+        path.read_text(encoding="utf-8", errors="ignore")
+        for path in (ROOT / "CITATION.cff", ROOT / "index.html", ROOT / "notes" / "release_notes.md")
+    )
+    doi_matches = sorted(set(re.findall(r"10\.5281/zenodo\.\d+", text)))
+    if doi_matches:
+        return result("Zenodo DOI", True, ", ".join(doi_matches))
+    return result(
+        "Zenodo DOI",
+        False,
+        "no Zenodo DOI recorded yet; enable Zenodo GitHub integration and create the GitHub release",
+        pending=True,
+    )
+
+
+def osf_result() -> CheckResult:
+    text = "\n".join(
+        path.read_text(encoding="utf-8", errors="ignore")
+        for path in (ROOT / "index.html", ROOT / "notes" / "release_notes.md")
+    )
+    osf_matches = sorted(set(re.findall(r"https://osf\.io/[A-Za-z0-9_-]+/?", text)))
+    if osf_matches:
+        return result("OSF mirror", True, ", ".join(osf_matches))
+    return result(
+        "OSF mirror",
+        False,
+        "no OSF project URL recorded yet; create/update OSF project after release and DOI are ready",
+        pending=True,
+    )
+
+
+def collect_results() -> list[CheckResult]:
+    results: list[CheckResult] = []
+    results.extend(required_file_results())
+    results.extend(
+        [
+            license_result(),
+            citation_result(),
+            release_notes_result(),
+            repo_visibility_result(),
+            pages_result(),
+            github_release_result(),
+            zenodo_result(),
+            osf_result(),
+        ]
+    )
+    return results
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="return nonzero when any readiness item is pending or missing",
+    )
+    args = parser.parse_args(argv)
+
+    results = collect_results()
+    ready = sum(item.status == "READY" for item in results)
+    pending = sum(item.status == "PENDING" for item in results)
+    missing = sum(item.status == "MISSING" for item in results)
+
+    for item in results:
+        print(f"{item.status}: {item.name} - {item.detail}")
+    print(f"publication readiness summary: {ready} ready, {pending} pending, {missing} missing")
+
+    if args.strict and (pending or missing):
+        return 1
+    if missing:
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

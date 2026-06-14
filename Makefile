@@ -22,7 +22,7 @@ VISUAL_AUDIT_EXPECTED_PNGS ?= 360
 BILINGUAL_PRINT_DIR ?= /tmp/llm_book_bilingual_print
 BILINGUAL_PRINT_TEX := $(BILINGUAL_PRINT_DIR)/book_bilingual_print.tex
 
-.PHONY: all english zh check toolchain-check repo-hygiene-check release-inventory-check source-inventory-check audit-script-check makefile-consistency-check citation-check structure-check frontmatter-quality-check abstract-quality-check chapter-contract-check heading-quality-check toc-review-check coverage-check edition-alignment-check bilingual-coverage-check bilingual-alignment-check bilingual-print-artifact-check bilingual-print-proofing-check frontier-coverage-check crossref-check table-quality-check caption-quality-check figure-description-check snmono-policy-check provenance-check term-check backmatter-quality-check prose-quality-check chinese-prose-quality-check duplicate-prose-check paragraph-length-check exercise-quality-check reproducibility-check index-check reviewer-check pdf-metadata-check pdf-font-check pdf-text-check pdf-reference-check pdf-outline-check pdf-page-integrity-check visual-smoke-check visual-full-check visual-audit-plan-check proofing-plan-check documentation-check placeholder-check chktex-triage-check chktex-budget-check chktex-focused-check log-quality-check manuscript-audit release-candidate bilingual-print-plan chktex-review visual-audit clean clean-check
+.PHONY: all english zh check toolchain-check repo-hygiene-check release-inventory-check source-inventory-check audit-script-check makefile-consistency-check citation-check structure-check frontmatter-quality-check abstract-quality-check chapter-contract-check heading-quality-check toc-review-check coverage-check edition-alignment-check bilingual-coverage-check bilingual-alignment-check bilingual-print-artifact-check bilingual-print-proofing-check frontier-coverage-check crossref-check table-quality-check caption-quality-check figure-description-check snmono-policy-check provenance-check term-check backmatter-quality-check prose-quality-check chinese-prose-quality-check duplicate-prose-check paragraph-length-check exercise-quality-check reproducibility-check index-check reviewer-check pdf-metadata-check pdf-font-check pdf-text-check pdf-reference-check pdf-outline-check pdf-page-integrity-check visual-smoke-check visual-full-check visual-audit-plan-check proofing-plan-check documentation-check placeholder-check chktex-triage-check chktex-budget-check chktex-focused-check log-quality-check manuscript-audit release-candidate publication-readiness bilingual-print-plan chktex-review visual-audit clean clean-check
 
 all: english zh check
 
@@ -33,6 +33,9 @@ release-candidate: manuscript-audit
 	$(MAKE) clean-check
 	$(GIT) diff --check
 	$(MAKE) release-inventory-check
+
+publication-readiness:
+	$(PYTHON) scripts/check_publication_readiness.py
 
 bilingual-print-plan:
 	$(PYTHON) scripts/report_bilingual_print_plan.py

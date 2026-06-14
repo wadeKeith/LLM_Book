@@ -66,6 +66,7 @@ make log-quality-check
 make placeholder-check
 make manuscript-audit
 make release-candidate
+make publication-readiness
 make clean
 make clean-check
 ```
@@ -199,6 +200,8 @@ make clean-check
 
 `make release-candidate` runs the full manuscript audit, then executes `make clean`, `make clean-check`, `git diff --check`, and a final `make release-inventory-check` so the release workspace is checked again after cleanup.
 
+`make publication-readiness` reports external publication state after the release candidate is prepared. It checks required local publication files, citation metadata, release notes, root license/reuse statement, GitHub repository visibility, GitHub Pages, GitHub Release tag `v2026.06.14`, recorded Zenodo DOI, and recorded OSF mirror URL. The default target exits successfully when items are ready or pending but fails on missing local prerequisites; `python3 scripts/check_publication_readiness.py --strict` can be used after public release to fail on any pending item.
+
 `make clean-check` is intended to run after `make clean`. It verifies that ignored LaTeX side files, SNmono `DescriptionTexts.txt`, Python cache directories, and `.DS_Store` files are not left in the release workspace.
 
 ## Latest Result
@@ -209,13 +212,13 @@ The latest citation check found 294 unique cited keys, 294 bibliography entries,
 
 The latest repository-hygiene check inspected 10 release/template files, 19 required `.gitignore` patterns, root build configuration, and README release instructions, with no drift or missing-file failures.
 
-The latest release-inventory check inventoried 119 release files across 7 documented file classes, ignored build/private files, and found no uninventoried non-build files or undocumented external asset classes. The ignored-file count is intentionally not pinned because LaTeX side files and Python caches are transient release-build artifacts.
+The latest release-inventory check inventoried 120 release files across 7 documented file classes, ignored build/private files, and found no uninventoried non-build files or undocumented external asset classes. The ignored-file count is intentionally not pinned because LaTeX side files and Python caches are transient release-build artifacts.
 
 The latest source-inventory check inventoried 1,565 regular source-root files outside `LLM_Book`, including 207 MP4 files, 64 PDF files, 20 PPTX slide decks, 476 Python files, 51 notebooks, 80 Markdown files, and 96 text files. It found 703 provenance-readable text/code files under the automated suffix and size policy, plus 0 readable files over the provenance-scan size cap.
 
-The latest audit-script check found 54 audit Python scripts, 52 audit check scripts referenced by Makefile, and 0 audit script compile/header errors.
+The latest audit-script check found 55 audit Python scripts, 53 audit check scripts referenced by Makefile, and 0 audit script compile/header errors.
 
-The latest Makefile-consistency check found 63 Makefile phony targets, 63 Makefile target definitions, 52 manuscript-audit dependencies, 4 release-candidate recipe steps, and 0 Makefile consistency errors.
+The latest Makefile-consistency check found 64 Makefile phony targets, 64 Makefile target definitions, 52 manuscript-audit dependencies, 4 release-candidate recipe steps, and 0 Makefile consistency errors.
 
 The latest structure check found valid English and Chinese root publication scaffolds, 17 English chapters, and 17 Chinese content chapters, with no missing key-term/exercise sections, orphan English chapter files, or external image/code imports.
 
