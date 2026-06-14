@@ -3,12 +3,17 @@
 
 \abstract{This chapter introduces multimodal and generative foundation models through contrastive representation learning, visual encoders, projection layers, query transformers, cross-attention adapters, unified understanding-generation systems, diffusion and rectified-flow objectives, any-to-any omni models, multimodal instruction tuning, OCR and chart reasoning, image and video token budgets, multimodal evaluation, hallucination, privacy, and safety issues unique to systems that combine language with images, audio, video, and other continuous signals.}
 
+\paragraph{Chapter contract.} The reader should leave this chapter able to analyze multimodal systems as foundation-model lifecycles with new token, objective, latency, provenance, and safety contracts, rather than as language models with pictures attached, and compare understanding, generation, and action interfaces.
+
 \section{Modalities as Interfaces}
+\index{multimodal model}\index{multimodal model!interface}\index{modality interface}
 A language model consumes tokens. Images, audio, video, tables, plots, documents, and sensor streams are not naturally token sequences in the same vocabulary. A multimodal LLM must therefore solve an interface problem: convert non-text signals into representations that a language model can use while preserving the information needed for the task.
 
 The modern vision-language model (VLM) stack usually contains a modality encoder, a connector, and a language model. The encoder turns an image or video into patches, frames, or embeddings. The connector maps those representations into the language model's hidden space. The language model then performs instruction following, reasoning, and generation. This design inherits strengths and weaknesses from both sides. It can use the language model's broad knowledge and dialogue ability, but it can also hallucinate visually, over-rely on text priors, miss small spatial details, and obey malicious instructions embedded inside images.
 
 This chapter takes a wider view than LLM-centered visual question answering. Understanding and generation are converging. A frontier system may read an image, reason over a document, speak in real time, edit a picture, generate video, call tools, and eventually select actions in a physical or simulated environment inside one product contract. The core engineering ideas are representation alignment, token budgeting, generative objective choice, instruction data, action interfaces, evaluation, safety, and provenance across modalities.
+
+Figure~\ref{fig:unified-multimodal-stack} shows the interface layers that connect modality encoders, a foundation core, generators, and action outputs.
 
 \begin{figure}[t]
 \centering
@@ -30,25 +35,23 @@ This chapter takes a wider view than LLM-centered visual question answering. Und
 \draw[llmdash] (safety.east) -- (gen.west);
 \end{tikzpicture}
 }
+\Description{Interface stack diagram connecting modalities to encoders, interface tokens, a foundation core, generators, and outputs, with safety and provenance wrapping generated media and actions.}
 \caption{A unified multimodal system is an interface design problem. The core model may be shared, but each modality still needs explicit encoding, token-budget, generation, evaluation, and safety contracts.}
 \label{fig:unified-multimodal-stack}
 \end{figure}
 
 \section{Contrastive Pretraining}
+\index{contrastive learning}\index{CLIP}\index{image-text pair}
 \subsection{Image-Text Alignment}
 CLIP-style pretraining learns a shared embedding space for images and text using large collections of image-caption pairs \cite{radford2021learning}. Let $f_\theta(I_i)$ be the normalized embedding of image $I_i$, and $g_\psi(T_j)$ be the normalized embedding of text $T_j$. For a batch of $N$ matched pairs, the image-to-text contrastive loss is
 \[
+    \begin{aligned}
+    s_{ij} &= f_\theta(I_i)\cdot g_\psi(T_j)/\tau,\\
+    D_i &= \exp(s_{i1})+\cdots+\exp(s_{iN}),\\
     \mathcal{L}_{I\rightarrow T}
-    =
-    -\frac{1}{N}
-    \sum_{i=1}^{N}
-    \log
-    \frac{
-        \exp(f_\theta(I_i)^\top g_\psi(T_i)/\tau)
-    }{
-        \sum_{j=1}^{N}
-        \exp(f_\theta(I_i)^\top g_\psi(T_j)/\tau)
-    },
+      &= -\operatorname{avg}_{1\le i\le N}
+         \log \frac{\exp(s_{ii})}{D_i},
+    \end{aligned}
 \]
 with a symmetric text-to-image term. The temperature $\tau$ controls the sharpness of the matching distribution. The model is not trained to generate captions. It is trained to place matched images and texts near each other and unmatched pairs farther apart.
 
@@ -60,6 +63,7 @@ CLIP also demonstrates that language can define labels. To classify an image, on
 For LLM-centered VLMs, contrastive encoders provide a strong visual backbone, but the assistant still needs a way to condition a generative language model on visual features. That connector is where many architecture differences arise.
 
 \section{Connecting Vision and Language}
+\index{vision-language model}\index{vision-language model!connector}\index{projector}\index{visual token}
 \subsection{Frozen Encoders and Projection Layers}
 The simplest connector freezes a vision encoder and a pretrained LLM, then trains a projection module $P_\eta$:
 \[
@@ -84,23 +88,26 @@ Flamingo-style models add cross-attention layers that let the language model att
 Cross-attention adapters are more complex than projection layers, but they avoid forcing all visual information into ordinary text-token positions. They also make it easier to handle multiple images or video frames. The tradeoff is implementation complexity, memory use, and the need to train or tune inserted layers across the language model depth.
 
 \subsection{Architecture Tradeoffs}
+Table~\ref{tab:vlm-connectors} compares common connector designs and their risks.
+
 \begin{table}[t]
 \centering
 \begin{tabular}{p{0.23\textwidth}p{0.30\textwidth}p{0.32\textwidth}}
-\hline
+\toprule
 Connector & Strengths & Typical risks \\
-\hline
+\midrule
 Linear or MLP projection & Simple, cheap, easy to retrofit to an LLM & Too many tokens; weak spatial grounding; connector bottleneck \\
 Query transformer & Compresses visual features; keeps large backbones frozen & May discard small text or spatial details; extra pretraining stages \\
 Cross-attention adapter & Handles interleaved media; flexible conditioning & More invasive architecture changes; higher memory cost \\
 End-to-end multimodal training & Can optimize perception and language jointly & Expensive; greater risk of forgetting and data imbalance \\
-\hline
+\bottomrule
 \end{tabular}
 \caption{Common connector designs for LLM-centered multimodal models.}
 \label{tab:vlm-connectors}
 \end{table}
 
 \section{Unified Understanding and Generation}
+\index{unified generation}\index{multimodal model!unified generation}\index{Any-to-Any model}\index{joint embedding}
 \label{sec:unified-understanding-generation}
 
 The older split was simple: vision-language models answered questions about media, while diffusion models generated images or video. Recent work is trying to make that boundary disappear. Surveys of unified multimodal understanding and generation models organize the field into autoregressive, diffusion-based, and hybrid paradigms, and emphasize recurring challenges in tokenization, cross-modal attention, data balance, and benchmark design \cite{zhao2025unifiedmmug}.
@@ -112,9 +119,12 @@ Janus-Pro illustrates an autoregressive path toward unification. It improves a J
 Omni systems push the interface further. Qwen3-Omni reports a single multimodal model spanning text, image, audio, and video understanding with speech generation and low-latency streaming considerations \cite{qwen2025qwen3omni}. AR-Omni takes an even more literal autoregressive position: text, image generation, and streaming speech generation are placed under a single Transformer decoder and next-token-style interface \cite{cheng2026aromni}. Whether such systems win broadly depends on more than benchmark averages. They must show that one interface can handle modality imbalance, real-time constraints, visual fidelity, speech naturalness, safety policy, and efficient serving.
 
 \section{Generative Modeling Objectives}
+\index{diffusion model}\index{generative objective!diffusion}\index{flow matching}\index{generative objective!flow matching}\index{autoregressive image generation}\index{generative objective!autoregressive}
 \label{sec:generative-modeling-objectives}
 
 Autoregressive language modeling is only one generative objective. For text, the next-token factorization is natural because output is a sequence. For images, audio, and video, sequential tokenization is possible but not always the most efficient or controllable representation. Generative foundation models therefore use a family of objectives.
+
+Table~\ref{tab:generative-objective-families} summarizes the objective families that appear in modern multimodal generation systems.
 
 \begin{table}[t]
 \caption{Generative objective families used in multimodal foundation systems.}
@@ -122,16 +132,45 @@ Autoregressive language modeling is only one generative objective. For text, the
 \small
 \centering
 \begin{tabular}{@{}p{0.18\textwidth}p{0.25\textwidth}p{0.23\textwidth}p{0.22\textwidth}@{}}
-\hline\noalign{\smallskip}
+\toprule
 Objective & Natural strengths & Typical cost surface & Failure modes \\
-\noalign{\smallskip}\svhline\noalign{\smallskip}
+\midrule
 Autoregressive & Streaming text, code, speech tokens, tool traces & Sequential decode length and KV cache & Awkward spatial ordering; slow high-resolution media \\
 Diffusion & Image/video fidelity, editing, diversity & Iterative denoising steps and guidance & Prompt drift; expensive sampling; safety filter dependence \\
 Rectified flow & Direct noise-to-data transport with transformer backbones & Step schedule and latent resolution & Flow mismatch; weak conditioning if text-media alignment is poor \\
 Hybrid AR-diffusion & Semantic planning plus continuous synthesis & Cascade latency and cross-module contracts & Beautiful but unfaithful media; brittle intermediate plans \\
-\noalign{\smallskip}\hline
+\bottomrule
 \end{tabular}
 \end{table}
+
+Figure~\ref{fig:multimodal-regression-grid} shows why unified multimodal systems need a regression grid rather than a single aggregate score.
+
+\begin{figure}[t]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[node distance=0.55cm and 0.65cm]
+\node[llmblock, text width=2.45cm] (inputs) {input contract\\text, image, audio, video};
+\node[llmblock, right=of inputs, text width=2.55cm] (core) {shared system\\encoder, connector, decoder};
+\node[llmblock, right=of core, text width=2.45cm] (outputs) {output contract\\answer, media, speech, action};
+\node[llmblock, right=of outputs, text width=2.55cm] (evidence) {evidence gates\\quality, latency, safety};
+
+\node[llmnote, below=0.65cm of core, text width=2.55cm] (understand) {understanding\\grounding, OCR, time};
+\node[llmnote, below=0.65cm of outputs, text width=2.55cm] (generate) {generation\\control, fidelity, provenance};
+\node[llmnote, below=0.65cm of evidence, text width=2.55cm] (action) {action\\rollback, intervention, harm};
+
+\draw[llmarrow] (inputs) -- (core);
+\draw[llmarrow] (core) -- (outputs);
+\draw[llmarrow] (outputs) -- (evidence);
+\draw[llmdash] (core) -- (understand);
+\draw[llmdash] (outputs) -- (generate);
+\draw[llmdash] (evidence) -- (action);
+\draw[llmdash] (evidence.north) .. controls +(0,0.9cm) and +(0,0.9cm) .. node[above, font=\scriptsize] {regression matrix across modality pairs and risk tiers} (inputs.north);
+\end{tikzpicture}
+}
+\Description{A multimodal regression grid links input contracts, shared model components, output contracts, and evidence gates, with checks for understanding, generation, and action.}
+\caption{Unified multimodal systems need regression coverage across understanding, generation, streaming, provenance, and action, not only a headline score. The grid synthesizes design pressures visible in Janus-Pro, MMaDA, Sora, AR-Omni, Qwen3-Omni, and OpenVLA \cite{chen2025januspro,yang2025mmada,openai2024sora,cheng2026aromni,qwen2025qwen3omni,kim2024openvla}.}
+\label{fig:multimodal-regression-grid}
+\end{figure}
 
 \subsection{Autoregressive Generation}
 Autoregressive multimodal models serialize media into tokens and train the model to predict the next token. This gives a unified training and inference story: the same decoder can condition on text, image tokens, audio tokens, and previous generated media tokens. The price is ordering. A fixed raster or codec order may be awkward for global image layout, bidirectional editing, or infilling. The model may need many sequential steps to generate content that humans perceive holistically.
@@ -141,21 +180,23 @@ Diffusion models generate by starting from noise and iteratively denoising towar
 
 In the common denoising formulation, a clean latent $x_0$ is corrupted to $x_t$ and the model predicts the injected noise under condition $c$:
 \[
+  \begin{aligned}
+  q_{\mathrm{diff}}(x_t,t,c)
+    &= \epsilon-\epsilon_\theta(x_t,t,c),\\
   \mathcal{L}_{\mathrm{diff}}
-  =
-  \mathbb{E}_{x_0,\epsilon,t,c}
-  \left[
-    \left\|\epsilon-\epsilon_\theta(x_t,t,c)\right\|_2^2
-  \right].
+    &= \mathbb{E}_{x_0,\epsilon,t,c}\,
+       q_{\mathrm{diff}}(x_t,t,c)\cdot q_{\mathrm{diff}}(x_t,t,c).
+  \end{aligned}
 \]
 Rectified flow instead learns a velocity field between a noise endpoint $\xi_0$ and data endpoint $x_1$, often with $x_t=(1-t)\xi_0+t x_1$:
 \[
+  \begin{aligned}
+  q_{\mathrm{flow}}(x_t,t,c)
+    &= v_\theta(x_t,t,c)-(x_1-\xi_0),\\
   \mathcal{L}_{\mathrm{flow}}
-  =
-  \mathbb{E}_{\xi_0,x_1,t,c}
-  \left[
-    \left\|v_\theta(x_t,t,c)-(x_1-\xi_0)\right\|_2^2
-  \right].
+    &= \mathbb{E}_{\xi_0,x_1,t,c}\,
+       q_{\mathrm{flow}}(x_t,t,c)\cdot q_{\mathrm{flow}}(x_t,t,c).
+  \end{aligned}
 \]
 These formulas hide many implementation choices: latent encoder, timestep schedule, conditioning pathway, guidance, safety filters, and how generated media is linked back to prompt evidence.
 
@@ -167,6 +208,7 @@ Hybrid systems try to combine the strengths of both families. An autoregressive 
 This objective choice changes serving and governance. Autoregressive models expose token log probabilities and stream naturally. Diffusion and flow models expose step schedules, guidance scales, denoising trajectories, and image/video safety filters. Hybrid models expose both. A publishable system report should state not only what the model can generate, but which objective produced it, which tokens or latents were used, what safety filters operated before and after generation, and how provenance is preserved.
 
 \section{Action, Embodiment, and World Models}
+\index{vision-language-action model}\index{vision-language-action model!action interface}\index{world model}\index{embodied AI}
 \label{sec:action-embodiment-world-models}
 
 The next boundary after text, image, audio, and video is action. A vision-language-action (VLA) model maps observations and instructions to actions, often by representing robot actions as tokens or by attaching an action head to a multimodal backbone. RT-2 showed a direct version of this idea: co-fine-tune vision-language models on web-scale vision-language tasks and robotic trajectories, then express actions in a token-like format so the model can transfer some semantic knowledge into robotic control \cite{brohan2023rt2}. OpenVLA made this direction more reproducible by releasing a 7B open-source VLA trained on a large collection of real-world robot demonstrations, with fine-tuning and quantization paths for new settings \cite{kim2024openvla}.
@@ -179,7 +221,7 @@ A behavior-cloned VLA policy can be written as
 \[
   \mathcal{L}_{\mathrm{VLA}}
   =
-  -\sum_{t}
+  -\operatorname{avg}_t
   \log \pi_\theta(a_t \mid o_{\le t}, u, h_t),
 \]
 where $o_{\le t}$ is the observation history, $u$ is the language instruction, $h_t$ is optional task memory, and $a_t$ may be a discretized action token or a continuous control target. Reinforcement-learning variants replace or augment imitation with an expected return objective $\mathbb{E}_{\pi_\theta}[\sum_t \gamma^t r_t]$, but real-world exploration is constrained by safety, reset cost, and sparse rewards.
@@ -187,6 +229,7 @@ where $o_{\le t}$ is the observation history, $u$ is the language instruction, $
 World models connect action and generation. A video generator that predicts plausible futures, an embodied model that imagines the consequence of a grasp, and a planner that simulates alternative tool calls all use generative modeling as a decision aid. The risk is confusing visual plausibility with physical truth. A generated future can be coherent and still violate dynamics, contact, object permanence, or task constraints. Evaluation must therefore test not only whether the future looks realistic, but whether it supports better decisions under intervention.
 
 \section{Multimodal Instruction Tuning}
+\index{multimodal instruction tuning}\index{image placeholder}\index{label masking}\index{label masking!multimodal}
 \subsection{Training Stages}
 A practical VLM is rarely trained in one stage. A common sequence is:
 \begin{enumerate}
@@ -224,12 +267,20 @@ Image tokens must be represented in the chat template. A serialized example may 
 \]
 The literal tokens differ by implementation, but consistency is critical. Training and inference should use the same role markers, image markers, and ordering. Multi-image prompts need unambiguous references: ``first image'', ``second image'', bounding boxes, page numbers, or frame timestamps.
 
+\subsection{Image Markers, Tiling, and Label Masks}
+A token such as \texttt{<image>} is a placeholder, not a normal word. In LLaVA-style systems, the processor tokenizes the text prompt, records the image marker id, preprocesses the image into one or more fixed-size tensors, passes those tensors through a vision encoder, projects the resulting patch features, and then replaces the marker position with visual embeddings \cite{liu2023visual}. Once this replacement happens, the sequence seen by the language model is no longer the same length as the text-token sequence.
+
+High-resolution handling makes the expansion concrete. A non-square image may be resized, padded, tiled into crops, and accompanied by a global view so that small details remain visible without distorting the original aspect ratio. If a ViT encoder uses patch size $14$ and receives $336\times336$ crops, one crop yields $24\times24=576$ patch features before any selection or pooling. Multiple crops can therefore produce thousands of visual tokens for a single user turn. This is why visual-token budgeting belongs in the same discussion as long-context serving.
+
+The merged multimodal sequence must rebuild attention masks, position ids, and labels. Visual embeddings should condition the answer, but they are not text labels to be predicted by the language-model loss. Text padding, image padding, crop order, multi-image references, and previous conversation turns must be aligned before batching. Many implementation failures that look like weak visual reasoning are actually serialization failures: the image marker is misplaced, the visual features are inserted at the wrong position, labels are shifted across the image span, or the attention mask lets one packed example see another.
+
 \subsection{OCR, Charts, and Documents}
 Document understanding stresses VLMs differently from natural images. The model must read small text, preserve layout, associate labels with values, and reason over tables. Increasing image resolution helps but increases visual tokens. Some systems use specialized OCR tools and feed recognized text to the LLM; others rely on native visual reading. The best choice depends on the domain. OCR tools provide explicit text and coordinates, while native VLMs can combine layout and semantics but may hallucinate characters.
 
 Charts require another layer: the model must map visual marks to quantities. It may need to infer axes, units, legends, and trends. Evaluation should check numerical accuracy, not merely plausible prose. A response that describes a bar chart fluently but swaps the largest and second-largest category is a failure.
 
 \section{Systems Costs}
+\index{frame sampling}\index{multimodal serving!video}\index{speech token}\index{multimodal serving}
 \subsection{Visual Tokens and Prefill}
 For text-only LLMs, long prompts increase prefill cost. For VLMs, the image itself can contribute hundreds or thousands of tokens before the user question is considered. If an image is split into $P$ patches and projected to $M$ visual tokens, the LLM prefill length becomes approximately
 \[
@@ -256,6 +307,7 @@ System designers should report:
 Without these details, benchmark numbers are hard to interpret and deployment costs are hard to predict.
 
 \section{Evaluation}
+\index{multimodal benchmark}\index{multimodal evaluation!benchmark}\index{visual grounding}\index{OCR}
 \subsection{Benchmark Families}
 Multimodal evaluation must test perception and reasoning separately. MMMU evaluates multimodal understanding across expert-level disciplines \cite{yue2023mmmu}; MathVista focuses on mathematical reasoning in visual contexts \cite{lu2023mathvista}. POPE and HallusionBench probe visual hallucination and visual illusion failure modes \cite{li2023pope,guan2023hallusionbench}. Recent frontier and open reports, including GPT-4o and Qwen2.5-VL, report broad multimodal capability and safety evaluations \cite{openai2024gpt4o,qwen2025vl,han2025multimodal}.
 
@@ -274,6 +326,7 @@ Key cautions include:
 For serious deployments, create in-domain tests with private images, controlled perturbations, and human review of failures.
 
 \section{Safety and Governance}
+\index{multimodal safety}\index{multimodal safety!prompt injection}\index{image provenance}\index{deepfake}
 \subsection{Visual Prompt Injection}
 Images can contain instructions. A screenshot may say ``ignore previous instructions'', a document may include hidden white text, or a QR code may point to malicious content. If the VLM treats image text as user instruction rather than untrusted data, it can be prompt-injected. Visual jailbreaks such as typographic prompts demonstrate that safety training for text-only models does not automatically transfer to vision-language systems \cite{gong2023figstep}. MM-SafetyBench-style evaluations show that harmful requests can be smuggled or amplified through images \cite{liu2023mmsafetybench}.
 
@@ -286,6 +339,7 @@ Images often contain faces, addresses, medical information, documents, screens, 
 Visual hallucination occurs when a model asserts objects, text, actions, or relations not supported by the image. It can come from language priors, weak visual features, low resolution, or overextended reasoning. Mitigations include higher-resolution crops, object detectors, OCR verification, uncertainty prompts, and training data with negative examples. The model should learn to say ``I cannot tell from this image'' when evidence is insufficient.
 
 \section{Implementation Notes}
+\index{processor}\index{modality batching}
 A minimal VLM implementation plan is:
 \begin{enumerate}
     \item Choose the visual domains: natural images, screenshots, documents, charts, video, or medical imagery.
@@ -300,26 +354,27 @@ A minimal VLM implementation plan is:
 
 \section{Key Terms}
 \begin{description}
-    \item[Vision encoder.] A model that maps images or video frames into feature representations.
-    \item[Contrastive learning.] Training matched image-text pairs to be close in embedding space and mismatched pairs far apart.
-    \item[Connector.] A projection, query transformer, or adapter that maps modality features into the LLM interface.
-    \item[Visual token.] A representation of image content inserted into or attended by the language model.
-    \item[Q-Former.] A query transformer that compresses visual features into a small set of learned query outputs.
-    \item[Unified understanding-generation model.] A multimodal model or system that both interprets input media and generates or edits media under a shared interface.
-    \item[Any-to-any model.] A system that accepts multiple input modalities and can produce multiple output modalities, such as text, image, audio, speech, or video.
-    \item[Diffusion model.] A generative model that learns to reverse a noising process, often producing data through iterative denoising in pixel, token, or latent space.
-    \item[Rectified flow.] A generative formulation that learns a flow from noise to data, often used as an alternative to diffusion for high-resolution visual synthesis.
-    \item[VLA model.] A vision-language-action model that maps visual observations and language instructions to actions in a physical or simulated environment.
-    \item[World model.] A model used to predict or simulate future states, observations, or consequences of actions for planning or evaluation.
-    \item[Visual hallucination.] A claim about image content that is not supported by the image.
-    \item[Visual prompt injection.] Malicious or conflicting instructions embedded in image or document content.
-    \item[Grounding.] The degree to which a response is supported by specific parts of the input modality.
+    \item[Vision encoder] A model that maps images or video frames into feature representations.
+    \item[Contrastive learning] Training matched image-text pairs to be close in embedding space and mismatched pairs far apart.
+    \item[Connector] A projection, query transformer, or adapter that maps modality features into the LLM interface.
+    \item[Visual token] A representation of image content inserted into or attended by the language model.
+    \item[Q-Former] A query transformer that compresses visual features into a small set of learned query outputs.
+    \item[Unified understanding-generation model] A multimodal model or system that both interprets input media and generates or edits media under a shared interface.
+    \item[Any-to-any model] A system that accepts multiple input modalities and can produce multiple output modalities, such as text, image, audio, speech, or video.
+    \item[Diffusion model] A generative model that learns to reverse a noising process, often producing data through iterative denoising in pixel, token, or latent space.
+    \item[Rectified flow] A generative formulation that learns a flow from noise to data, often used as an alternative to diffusion for high-resolution visual synthesis.
+    \item[VLA model] A vision-language-action model that maps visual observations and language instructions to actions in a physical or simulated environment.
+    \item[World model] A model used to predict or simulate future states, observations, or consequences of actions for planning or evaluation.
+    \item[Visual hallucination] A claim about image content that is not supported by the image.
+    \item[Visual prompt injection] Malicious or conflicting instructions embedded in image or document content.
+    \item[Grounding] The degree to which a response is supported by specific parts of the input modality.
 \end{description}
 
 \section{Exercises}
 \begin{enumerate}
     \item Derive the symmetric CLIP loss for a batch of three image-text pairs and identify the positive and negative pairs.
     \item Trace an image through a frozen vision encoder, projection layer, image marker, and language model context. List the tensor shapes at each step for a chosen patch size.
+    \item For a $1024\times899$ image processed as one global $336\times336$ view plus four tiled crops with patch size $14$, estimate the visual-token count before connector compression. Which attention-mask and label-mask changes are required after insertion into a chat template?
     \item Compare two connector designs for a document QA system: an MLP projection with many visual tokens and a query transformer with compressed tokens. Discuss accuracy and cost tradeoffs.
     \item Compare autoregressive, diffusion, and hybrid AR-diffusion approaches for a unified text-image system. State how each approach handles instruction following, editing, latency, and safety filtering.
     \item Design a minimal VLA evaluation for a tabletop robot. Specify observation modalities, action representation, reset rules, safety interlocks, and what counts as task success.

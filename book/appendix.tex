@@ -5,7 +5,27 @@
 Vectors are written in bold lowercase, matrices in uppercase, and tensors with named shapes when ambiguity would otherwise obscure the implementation. Sequence length is denoted by $T$, hidden width by $d_{\mathrm{model}}$, attention heads by $h$, and vocabulary size by $V$.
 
 \section{Experiment Records}
-Every executable experiment in the final manuscript should state the model, dataset, tokenizer, hardware, random seed policy, expected runtime, primary metric, and known failure modes.
+Every executable experiment in the final manuscript should be accompanied by a compact run card. Table~\ref{tab:run-card-template} gives the minimum record. A chapter may add task-specific fields, but it should not omit the identity, data, execution, evaluation, and failure-analysis fields.
+
+\begin{table}
+\caption{Minimum run-card fields for reproducible manuscript experiments.}\label{tab:run-card-template}
+\begin{tabular}{p{0.24\textwidth}p{0.66\textwidth}}
+\toprule
+Field group & Required content \\
+\midrule
+Run identity & Code version, configuration file, and command or notebook entrypoint \\
+Data contract & Dataset name, data version, license or provenance note, split, filtering, and contamination checks \\
+Tokenization & Tokenizer version, special tokens, chat template, truncation, packing, and label-mask policy \\
+Model contract & Model configuration, checkpoint source, adapter or quantization state, and context-length assumption \\
+Optimization & Optimizer, learning rate schedule, batch size, precision, gradient accumulation, random seed policy, and stopping rule \\
+Execution & Hardware, software stack, expected runtime, memory budget, checkpoint cadence, and resume semantics \\
+Evaluation & Validation set, primary metric, secondary regression metrics, decoding or scoring settings, and uncertainty estimate \\
+Failure analysis & Known failure modes, representative failed examples, safety or privacy caveats, and conclusion supported by the evidence \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+For short exercises, the run card can be a paragraph rather than a separate artifact. The important point is that another reader can identify the code version, data version, tokenizer and chat template, model configuration, random seed policy, optimizer, learning rate, batch size, precision, hardware, expected runtime, checkpoint and validation protocol, primary metric, observed failure modes, and the conclusion drawn from the run.
 
 \section{Source Provenance}
 The manuscript prose is original and cites public primary sources for research claims. It does not include copied third-party code, slide text, dataset rows, model outputs, or figures. Exercises are written as specifications that readers can implement themselves; when an exercise is inspired by a public project or paper, the relevant source is cited in the chapter bibliography.

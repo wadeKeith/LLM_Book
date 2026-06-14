@@ -1,12 +1,15 @@
 \chapter{Retrieval, Tools, and Agents}
 \label{ch:retrieval-tools-agents}
 
-\abstract{This chapter covers retrieval-augmented generation, embeddings, vector databases, retrievers, rerankers, chunking, citation faithfulness, context engineering, typed memory, tool calls, ReAct-style reasoning-action loops, and agent workflow evaluation.}
+\abstract{This chapter treats retrieval, tools, and agents as control systems around an LLM rather than prompt decorations. It covers retrieval-augmented generation, embeddings, vector databases, retrievers, rerankers, chunking, citation faithfulness, context engineering, typed memory, tool calls, ReAct-style reasoning-action loops, permissions, and workflow evaluation.}
+
+\paragraph{Chapter contract.} The reader should leave this chapter able to specify a RAG or tool-using system as a set of retrieval, context, action, and rollback contracts, evaluate evidence use rather than answer fluency alone, and identify prompt-injection and memory risks introduced by external state.
 
 \section{RAG as a Control System}
+\index{retrieval-augmented generation}\index{retrieval-augmented generation!control system}\index{control system}\index{retrieval failure}
 \label{sec:rag-control-system}
 
-Retrieval-augmented generation, or \rag, is often described as putting documents into the prompt. That description is too small. A production \rag system is a control system around an \llm. It decides what corpus is searchable, how documents are chunked, how queries are rewritten, which retriever and reranker are trusted, how much context is inserted, how the answer should cite evidence, when the model should abstain, and how to defend the system against hostile text inside retrieved documents.
+Retrieval-augmented generation, or \rag, is often described as putting documents into the prompt. That description is too small. A production \rag system is a control system around a \llm. It decides what corpus is searchable, how documents are chunked, how queries are rewritten, which retriever and reranker are trusted, how much context is inserted, how the answer should cite evidence, when the model should abstain, and how to defend the system against hostile text inside retrieved documents.
 
 The basic decomposition is
 \begin{equation}
@@ -16,10 +19,35 @@ The basic decomposition is
 \end{equation}
 where $q$ is the user query, $E_k$ is a selected evidence set, and $a$ is the answer. RAG originally connected neural retrievers with sequence generators for knowledge-intensive NLP tasks \cite{lewis2020retrieval}. Dense passage retrieval then made learned embedding search a practical alternative to purely sparse lexical search for open-domain question answering \cite{karpukhin2020dense}. Retrieval-augmented pretraining systems such as RETRO showed that retrieval can also be integrated into model training and scaling, not only into prompting \cite{borgeaud2022retro}.
 
+The original RAG formulation is also useful as a probabilistic model. The retrieved passage $z$ is a latent evidence variable with retriever distribution $p_\eta(z\mid x)$ and generator distribution $p_\theta(y_t\mid x,z,y_{<t})$. Let $z_1,\ldots,z_k$ denote the retrieved candidates and let $A_t(z)=p_\theta(y_t\mid x,z,y_{<t})$. RAG-Sequence assumes one retrieved document explains the whole answer:
+\[
+  \begin{aligned}
+  p_{\mathrm{seq}}(y\mid x)
+  &\approx p_\eta(z_1\mid x)A_1(z_1)\cdots A_T(z_1) \\
+  &\quad + \cdots
+  + p_\eta(z_k\mid x)A_1(z_k)\cdots A_T(z_k),
+  \end{aligned}
+\]
+whereas RAG-Token marginalizes evidence at each decoding step:
+\[
+  \begin{aligned}
+  C_t
+  &= p_\eta(z_1\mid x)A_t(z_1)+\cdots+p_\eta(z_k\mid x)A_t(z_k),\\
+  p_{\mathrm{tok}}(y\mid x)
+  &\approx C_1\cdots C_T.
+  \end{aligned}
+\]
+Modern production systems often materialize the selected evidence in a prompt instead of training this exact latent-variable model, but the distinction remains pedagogically important: evidence can be chosen once for the whole response, or it can vary across generated tokens. Multi-hop answers, synthesis across sources, and citation checking all depend on which assumption the system actually makes.
+
+The original RAG system is also a concrete training recipe, not merely an inference pattern. It initializes the retriever from DPR, uses maximum inner product search over a dense passage index to obtain top-$K$ passages, concatenates each passage with the input for a BART-style generator, and trains by minimizing the negative marginal log likelihood of the target sequence \cite{lewis2020retrieval,karpukhin2020dense}. No gold supporting document labels are required: the retriever is trained through the marginal likelihood signal. That convenience has a systems caveat. If document embeddings are updated during training, the vector index must be refreshed; if the document encoder and index are frozen, training is simpler but retrieval quality is bounded by the fixed memory. A report should therefore state which encoders are trainable, how often the index is rebuilt, what $K$ is used, and whether decoding marginalizes documents during generation or only inserts top-ranked context into a prompt.
+
 The central benefit is separation of concerns. Model weights store general linguistic and reasoning behavior; the retrieval layer stores mutable or private evidence. This separation improves freshness, auditability, and access control. It does not guarantee truth. If retrieval misses the relevant document, the generator may hallucinate. If retrieval returns misleading evidence, the generator may faithfully summarize the wrong source. If retrieved text contains instructions to ignore the user or reveal secrets, the generator may follow the wrong authority. The system must therefore evaluate retrieval, generation, and control logic separately.
+
+Figure~\ref{fig:rag-controlled-evidence-path} lays out the controlled evidence path used for the rest of the chapter.
 
 \begin{figure}[t]
 \centering
+\resizebox{\textwidth}{!}{%
 \begin{tikzpicture}[node distance=7mm and 6mm]
 \node[llmblock, text width=2.1cm] (query) {User\\query};
 \node[llmblock, right=of query, text width=2.1cm] (rewrite) {Rewrite /\\decompose};
@@ -37,11 +65,14 @@ The central benefit is separation of concerns. Model weights store general lingu
 \draw[llmdash] (check.west) -- ++(-1.0,0) node[left, font=\scriptsize] {answer, abstain, or retry};
 \node[llmnote, below=8mm of gen, text width=0.78\textwidth] {A RAG system should be evaluated component by component: retrieval recall, context precision, citation faithfulness, answer quality, injection resistance, freshness, and permissions.};
 \end{tikzpicture}
+}%
+\Description{Controlled evidence path diagram from user query to rewrite, hybrid retrieval, reranking, context building, grounded generation, citation and policy check, and answer, abstain, or retry decision.}
 \caption{A RAG pipeline as a controlled evidence path. The figure is an original synthesis from dense retrieval, RAG, and context-engineering literature \cite{karpukhin2020dense,lewis2020retrieval,mei2025context}.}
 \label{fig:rag-controlled-evidence-path}
 \end{figure}
 
 \section{Indexing and Retrieval}
+\index{embedding model}\index{embeddings|see{embedding model}}\index{vector index}\index{vector database|see{vector index}}\index{retrieval-augmented generation!indexing}\index{retrieval!indexing}\index{chunking}\index{hybrid retrieval}\index{retrieval!hybrid retrieval}
 \label{sec:indexing-retrieval}
 
 An index begins with documents, but retrieval usually operates over chunks. Chunking is a modeling decision. Short chunks improve lexical precision and citation granularity, but they can lose context. Long chunks preserve context, but they consume prompt budget and can bury the relevant sentence. Overlap helps when answers cross boundaries, but it increases storage and can produce duplicate evidence. A practical index stores each chunk with stable document id, source, timestamp, permissions, title, section path, and character offsets so that answers can cite and audit the original source.
@@ -57,8 +88,8 @@ Dense retrieval embeds queries and chunks into vectors. A typical scoring functi
 Sparse retrieval, such as BM25-style lexical search, remains valuable because exact names, rare identifiers, error codes, and legal citations often matter. Hybrid retrieval combines dense and sparse signals:
 \begin{equation}
   s_{\mathrm{hybrid}}(q,d) =
-  \lambda \,\widehat{s}_{\mathrm{dense}}(q,d)
-  + (1-\lambda)\,\widehat{s}_{\mathrm{sparse}}(q,d),
+  \lambda n_{\mathrm{dense}}(q,d)
+  + (1-\lambda)n_{\mathrm{sparse}}(q,d),
   \label{eq:hybrid-score}
 \end{equation}
 where scores are normalized before combination. The weight $\lambda$ is a tuning parameter, not a constant of nature.
@@ -66,6 +97,7 @@ where scores are normalized before combination. The weight $\lambda$ is a tuning
 Query rewriting can improve recall. The system may expand acronyms, generate paraphrases, add domain synonyms, or split a multi-part question into subqueries. In a medical-style retrieval system, for example, a symptom description may be rewritten into several clinically adjacent phrasings before vector search. Rewriting also adds risk: a rewrite can change the user's intent. The original query and all rewrites should be logged, and evaluation should measure whether rewriting improves recall without increasing false positives.
 
 \section{Reranking and Context Construction}
+\index{reranker}\index{retrieval-augmented generation!reranking}\index{retrieval!reranking}\index{context construction}\index{citation selection}
 \label{sec:reranking-context}
 
 Retrievers are usually optimized for recall at a moderate $k$. The generator, however, needs a small set of highly relevant, non-duplicative chunks inside a finite context window. Reranking bridges this gap by scoring query-document pairs with a more expensive model after initial retrieval. A cross-encoder reranker can compare the query and chunk jointly, which is often more precise than independent embeddings, but it is slower and harder to run over a large corpus.
@@ -79,9 +111,9 @@ Table~\ref{tab:rag-design-choices} lists design choices that should be documente
 \label{tab:rag-design-choices}
 \small
 \begin{tabular}{@{}p{2.5cm}p{4.2cm}p{4.8cm}@{}}
-\hline\noalign{\smallskip}
+\toprule
 Component & Choice & Failure Mode \\
-\noalign{\smallskip}\svhline\noalign{\smallskip}
+\midrule
 Chunking & Size, overlap, metadata, boundaries & Relevant evidence split or buried \\
 Embedding & Model, normalization, language coverage & Poor recall for domain terms or languages \\
 Retriever & Dense, sparse, or hybrid search & Misses exact ids or semantic paraphrases \\
@@ -89,11 +121,12 @@ Reranker & Cross-encoder, LLM judge, or rules & High precision but high latency 
 Context builder & Ordering, deduplication, compression & Prompt budget wasted or evidence distorted \\
 Generator & Prompt, citation rules, abstention & Unsupported claims or citation laundering \\
 Monitor & Logs, freshness, drift metrics & Silent index decay or stale answers \\
-\noalign{\smallskip}\hline
+\bottomrule
 \end{tabular}
 \end{table}
 
 \section{Generation with Evidence}
+\index{grounded generation}\index{retrieval-augmented generation!grounded generation}\index{citation}\index{answer synthesis}
 \label{sec:generation-with-evidence}
 
 The generator should be instructed to answer from evidence, but instruction alone is insufficient. The prompt should separate system policy, user request, retrieved evidence, and tool outputs. Retrieved text is data, not authority. A document may contain malicious instructions, outdated statements, or user-provided content. The system prompt should state that retrieved documents are untrusted evidence and that higher-priority instructions come from the developer or system layer.
@@ -105,6 +138,7 @@ Citation faithfulness is harder than appending source ids. A model can cite a so
 Compression is another risk. Systems often summarize retrieved chunks to save context. If the compressor removes uncertainty, dates, exceptions, or source qualifiers, the generator receives distorted evidence. Compression should be evaluated as its own component, and the system should preserve links to the original text for audit.
 
 \section{RAG Evaluation}
+\index{retrieval recall}\index{retrieval!recall}\index{retrieval-augmented generation!evaluation}\index{retrieval!evaluation}\index{faithfulness}\index{answer correctness}
 \label{sec:rag-evaluation}
 
 RAG evaluation begins before generation. Retrieval recall asks whether the evidence needed to answer the question appears in the candidate set. If recall is low, no generator can reliably fix the system. Metrics include recall@k, mean reciprocal rank, and normalized discounted cumulative gain when relevance labels are graded. For enterprise systems, labels may come from human annotation, click logs, answer citations, or synthetic questions generated from documents and then audited.
@@ -116,9 +150,12 @@ End-to-end judge scores are useful for triage but dangerous as the only metric. 
 The right baseline matters. Compare against no retrieval, sparse retrieval, dense retrieval, hybrid retrieval, reranking, and an oracle context where the gold evidence is supplied. The gap between oracle-context generation and retrieved-context generation estimates how much quality is being lost in retrieval and context construction. The gap between oracle-context generation and the gold answer estimates generator limitations.
 
 \section{Context Engineering and Memory}
+\index{context engineering}\index{retrieval-augmented generation!context engineering}\index{memory}\index{long-term memory}
 \label{sec:context-engineering-memory}
 
 RAG is one form of a broader discipline: context engineering. Context engineering treats the entire information payload supplied to the model as an object of design: system instructions, developer policy, user request, retrieved documents, conversation history, tool outputs, temporary scratchpads, long-term memory, and structured state. Recent surveys argue that this is no longer merely ``prompt engineering''; it is the systematic construction, processing, compression, routing, and governance of context for model behavior \cite{mei2025context}.
+
+The older phrase ``prompt engineering'' is still useful when it is interpreted operationally. In real applications it includes more than hand-writing a clever instruction: batch rewriting, deduplication, templating, role-play setup, chain-of-thought or scratchpad policy, data generation prompts, RAG context assembly, judge prompts, and task-specific output contracts. Treating these as code and data artifacts keeps them testable. A prompt change that rewrites user input, inserts retrieved context, or asks a judge to score an answer should be versioned and evaluated like any other model-facing transformation.
 
 This distinction matters because a capable model can still fail when the context contract is wrong. A long prompt can contain the relevant evidence but place it where the model underuses it. A memory system can preserve a user's preference but also preserve outdated or sensitive information. A tool output can be accurate but stale by the time the model acts on it. A context compressor can reduce latency while deleting the uncertainty that should have caused abstention. The design unit is therefore not a prompt string; it is a stateful context pipeline.
 
@@ -129,6 +166,7 @@ Memory should be typed. A production assistant may store user preferences, task 
 The practical test is simple: if a later answer depends on a piece of context, the system should be able to say where that context came from, why it was allowed into the prompt, whether it was transformed, and how it can be removed or corrected. Without that audit trail, context engineering becomes another source of untraceable model behavior.
 
 \section{Prompt Injection and Trust Boundaries}
+\index{prompt injection}\index{retrieval-augmented generation!prompt injection}\index{trust boundary}\index{untrusted context}
 \label{sec:prompt-injection-trust}
 
 RAG introduces untrusted text into the model's context. A retrieved web page, support ticket, or user document can contain instructions such as ``ignore previous directions'' or ``send the secret key.'' The model sees these tokens in the same context window as legitimate instructions unless the system marks and handles them carefully. This is prompt injection.
@@ -138,6 +176,7 @@ The defense is architectural, not just a warning sentence. Retrieved documents s
 Evaluation should include injection tests. Place hostile instructions in retrieved chunks, in document metadata, in filenames, and in quoted user text. Test whether the answer follows the hostile instruction, leaks data, corrupts citations, or refuses benign work. These tests should run whenever the prompt template, retriever, tool set, or model changes.
 
 \section{Tool Use}
+\index{tool schema}\index{function calling}\index{tool execution}
 \label{sec:tool-use}
 
 Tools extend a language model with actions whose results are not contained in the model weights: calculators, search APIs, databases, code execution, file systems, calendars, ticket systems, and domain services. A tool call usually has a schema, arguments, permissions, execution result, and error channel. Toolformer showed that models can be trained to decide when and how to call simple APIs from self-supervised traces \cite{schick2023toolformer}. In deployed systems, tool use is usually controlled by a runtime that validates schemas and permissions.
@@ -154,6 +193,7 @@ where $h_t$ is the dialogue and state history, $a_t$ may be a tool call or final
 Error recovery is part of tool competence. The model may call a function with invalid arguments, receive an empty result, exceed a rate limit, or encounter conflicting tool outputs. Training and evaluation should include these cases. A tool-using model that succeeds only when every call works on the first try is not robust.
 
 \section{Agents and Workflows}
+\index{agent}\index{agents|see{agent}}\index{workflow}\index{planner}
 \label{sec:agents-workflows}
 
 An agentic workflow repeatedly chooses actions, observes results, and updates state toward a task goal. ReAct made this pattern explicit by interleaving reasoning traces and actions so that a model can plan, call tools, and revise based on observations \cite{yao2023react}. Modern agentic model reports emphasize coding, tool use, long-horizon tasks, and environment feedback, but the engineering problem remains the same: the system must manage state, tools, permissions, retries, and evaluation \cite{kimi2025k2}.
@@ -163,6 +203,7 @@ Planning can help when tasks require many steps, but plans are not guarantees. A
 Evaluation of agents should focus on task completion under constraints, not on whether the transcript looks thoughtful. Useful metrics include success rate, number of tool calls, wall-clock time, cost, rollback rate, permission violations, human interventions, and quality of final artifacts. For coding agents, run tests and inspect diffs. For data agents, verify queries and outputs. For workflow agents, check that the external system ended in the intended state.
 
 \section{Systems Costs}
+\index{latency}\index{caching}\index{retrieval cost}
 \label{sec:rag-agent-systems-costs}
 
 Retrieval, tools, and agents spend inference-time compute. A single user request may trigger embedding calls, vector search, reranking, prompt construction, a long prefill, multiple decode steps, tool calls, retries, and judge evaluations. The cost model is therefore wider than tokens generated by the final answer.
@@ -179,12 +220,16 @@ Optimizing one term can worsen another. Retrieving more chunks may improve recal
 Freshness also has a systems cost. Indexes must be rebuilt or incrementally updated. Deleted documents must be removed from search results. Permission changes must take effect quickly. If the index is stale, a RAG answer may be worse than a base-model answer because it carries the appearance of grounded authority.
 
 \section{Agent Runtime Boundaries}
+\index{sandbox}\index{permission model}\index{audit trail}
 \label{sec:agent-runtime-boundaries}
 
 Agentic systems need a boundary diagram because the model is only one actor. The model proposes an action; the runtime validates schema, identity, permissions, rate limits, sandbox constraints, and rollback policy; the tool returns an observation; the context builder decides what portion of the observation re-enters the model. If the model is allowed to validate its own permissions, the system has already lost the security boundary.
 
+Figure~\ref{fig:agent-runtime-boundary} makes that authority boundary explicit.
+
 \begin{figure}[t]
 \centering
+\resizebox{\textwidth}{!}{%
 \begin{tikzpicture}[node distance=7mm and 8mm]
 \node[llmblock, text width=2.2cm] (state) {Typed\\state};
 \node[llmblock, right=of state, text width=2.2cm] (model) {LLM\\policy};
@@ -200,6 +245,8 @@ Agentic systems need a boundary diagram because the model is only one actor. The
 \draw[llmarrow] (audit) -| (state);
 \draw[llmdash] (runtime.south) -- node[right, font=\scriptsize, fill=white, inner sep=1pt] {deny / repair} (audit.north);
 \end{tikzpicture}
+}%
+\Description{Authority-boundary diagram showing typed state to model policy, proposed call to runtime guard, authorized call to tool or environment, observation, audit log and budget, and feedback to state.}
 \caption{A tool-using agent runtime. The model proposes actions, but the runtime owns authority, permissions, sandboxing, logging, and budget enforcement.}
 \label{fig:agent-runtime-boundary}
 \end{figure}
@@ -212,6 +259,8 @@ Agentic systems need a boundary diagram because the model is only one actor. The
 \item[Dense retrieval] Retrieval by learned vector representations and similarity search.
 \item[Hybrid retrieval] Combining dense semantic scores with sparse lexical scores.
 \item[Reranker] A second-stage model or rule that orders retrieved candidates more precisely before context insertion.
+\item[Latent-document marginalization] A RAG modeling view in which retrieved passages are hidden evidence variables and output likelihood is summed over top-$k$ passages.
+\item[Non-parametric memory] An external, editable evidence store such as a passage index, contrasted with knowledge stored in model parameters.
 \item[Citation faithfulness] The degree to which cited sources actually support the claims attached to them.
 \item[Context engineering] The design and governance of the full information payload supplied to a model, including retrieval, memory, tools, instructions, and state.
 \item[Prompt injection] An attack in which untrusted text inside context attempts to override higher-priority instructions or exfiltrate data.
@@ -224,8 +273,10 @@ Agentic systems need a boundary diagram because the model is only one actor. The
 
 \begin{enumerate}
 \item Build a small RAG benchmark with at least 30 questions and labeled supporting chunks. Report recall@5 before measuring answer quality.
+\item In the original RAG training recipe, identify which parts are parametric memory and non-parametric memory. Explain what changes if the document encoder is frozen versus trained.
 \item Compare three chunking strategies for the same corpus: short chunks, long chunks, and overlapping chunks. Measure retrieval recall, context precision, and average prompt tokens.
 \item Implement hybrid retrieval using Equation~\ref{eq:hybrid-score}. Sweep $\lambda$ and report which query types prefer dense versus sparse retrieval.
+\item Compare RAG-Sequence and RAG-Token scoring on a toy two-document example. Explain when one document should support the whole answer and when token-level evidence switching is necessary.
 \item Design a typed memory schema for a personal assistant. Specify which fields are user-visible, which expire automatically, and which require explicit permission before entering context.
 \item Create five prompt-injection documents and add them to a test index. Measure whether the system follows hostile instructions, leaks hidden text, or corrupts citations.
 \item Design a tool schema for read-only SQL querying. Specify argument validation, permission checks, error messages, and how generated SQL will be sandboxed.

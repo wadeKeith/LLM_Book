@@ -2,14 +2,13 @@
 % Root file for the Overleaf-ready monograph.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-\documentclass[graybox,envcountchap,sectrefs]{SNmono}
+\documentclass[graybox,envcountchap]{SNmono}
 
 \usepackage{type1cm}
 \usepackage{makeidx}
 \usepackage{graphicx}
 \usepackage{multicol}
 \usepackage[bottom]{footmisc}
-\usepackage{amsmath}
 \usepackage{amssymb}
 \usepackage{booktabs}
 \usepackage{tikz}
@@ -17,7 +16,7 @@
 \usepackage{xspace}
 \usepackage{newtxtext}
 \usepackage[varvw]{newtxmath}
-\usepackage[hidelinks]{hyperref}
+\usepackage[hidelinks,pdfpagelabels,plainpages=false,hypertexnames=false]{hyperref}
 \usetikzlibrary{arrows.meta,positioning,fit,calc,shapes.geometric}
 \tikzset{
   llmblock/.style={draw, rounded corners=2pt, align=center, minimum height=7mm, inner xsep=5pt, inner ysep=4pt, font=\small, fill=black!3},
@@ -33,6 +32,13 @@
   pdfkeywords={large language models, generative foundation models, transformers, alignment, retrieval, reasoning, multimodal AI, diffusion models, evaluation}
 }
 
+% SNmono's default section number box is too narrow for two-digit chapter
+% and section numbers such as 12.10, causing TOC labels to touch titles.
+\tocsecnum=34pt
+\tocsubsecnum=43pt
+\tocsubsubsecnum=52pt
+\calctocindent
+
 \newcommand{\llm}{large language model\xspace}
 \newcommand{\llms}{large language models\xspace}
 \newcommand{\transformer}{Transformer\xspace}
@@ -47,11 +53,13 @@
 \author{Cheng Yin}
 \title{Large Language and Generative Foundation Models}
 \subtitle{Foundations, Systems, Alignment, and Applications}
+\date{June 14, 2026}
 \maketitle
 
 \frontmatter
 \include{preface}
 \include{ethics}
+\pdfbookmark[0]{Contents}{frontmatter.contents}
 \tableofcontents
 \include{acronym}
 

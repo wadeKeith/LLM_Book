@@ -3,7 +3,10 @@
 
 \abstract{This chapter explains the systems layer that makes large-scale training feasible. It develops memory accounting for parameters, gradients, optimizer states, activations, and communication buffers; then covers data parallelism, fully sharded training, ZeRO-style optimizer partitioning, tensor parallelism, pipeline parallelism, expert parallelism, precision, collectives, throughput accounting, checkpointing, and operational reliability.}
 
+\paragraph{Chapter contract.} The reader should leave this chapter able to translate a model and batch plan into memory, communication, and throughput constraints, choose a parallelism strategy for those constraints, and recognize when an apparent modeling problem is actually a systems or reliability problem.
+
 \section{Why Training Systems Are Part of the Model}
+\index{distributed training}\index{training system}\index{accelerator cluster}
 \label{sec:systems-part-of-model}
 
 Large-scale pretraining is not obtained by placing a textbook optimizer inside a larger loop. The distributed system changes what batch size is affordable, how sequence length is chosen, which precision is safe, how often checkpoints can be written, and how quickly failures can be recovered. A model recipe that is mathematically clear but cannot fit in memory or communicate efficiently is not a runnable recipe.
@@ -11,6 +14,8 @@ Large-scale pretraining is not obtained by placing a textbook optimizer inside a
 The central design problem is to map a computation graph onto accelerators with limited memory and finite interconnect bandwidth. If the model fits on one GPU but the desired batch does not, data parallelism may be enough. If optimizer state is too large, sharding is needed. If a single layer's matrix multiplications do not fit or do not run efficiently, tensor parallelism becomes relevant. If depth or activation memory dominates, pipeline parallelism or activation checkpointing may be the right lever. If the model is sparse, expert parallelism adds a routing and load-balancing problem. Modern frontier training commonly composes several of these strategies rather than choosing only one \cite{narayanan2021efficient,deepseek2024v3}.
 
 The discipline of this chapter is accounting. Each strategy moves bytes, computation, or idle time from one place to another. It is not enough to say that a method ``saves memory.'' A useful systems design says which bytes are saved, which collectives are added, how overlap is achieved, what happens during checkpointing, and which failure mode becomes more likely.
+
+Figure~\ref{fig:distributed-systems-map} frames those choices as one systems mapping problem rather than independent tricks.
 
 \begin{figure}[t]
 \centering
@@ -33,11 +38,13 @@ The discipline of this chapter is accounting. Each strategy moves bytes, computa
 \node[llmnote, below=8mm of fault, text width=0.78\textwidth] {A parallel strategy is a joint choice of memory layout, collectives, checkpoint format, and operational runbook. The same mathematical model can be easy or impossible to train depending on this mapping.};
 \end{tikzpicture}
 }
+\Description{Systems map showing model graph, memory partition, compute partition, collective schedule, checkpoint input and output, failure recovery, quality and throughput logs, and retuning feedback.}
 \caption{Distributed training as a systems mapping problem. Data, FSDP/ZeRO, tensor, pipeline, and expert parallelism move memory and communication pressure to different parts of the runtime.}
 \label{fig:distributed-systems-map}
 \end{figure}
 
 \section{Memory Accounting}
+\index{memory accounting}\index{optimizer state}\index{activation memory}
 \label{sec:training-memory-accounting}
 
 For dense training with AdamW, the persistent state per parameter usually includes the parameter value, a gradient, and two optimizer moments. If parameters and gradients are stored in BF16 and Adam moments are stored in FP32, a rough per-parameter budget is
@@ -55,25 +62,28 @@ Activation memory is often the limiting term for long context or large micro-bat
 
 Temporary memory is the least visible category and one of the most common sources of out-of-memory errors. Matrix multiplication libraries allocate workspaces; attention kernels may allocate scratch buffers; distributed collectives may require staging buffers; model code may create transient copies through layout conversions; and memory fragmentation can prevent a large allocation even when total free memory looks sufficient. Production training systems leave headroom rather than filling the device to the last megabyte.
 
+Table~\ref{tab:training-memory-categories} separates the major memory categories so later parallelism choices can be tied to concrete bytes.
+
 \begin{table}[t]
 \caption{Major memory categories during dense \llm training.}
 \label{tab:training-memory-categories}
 \small
 \begin{tabular}{@{}p{2.9cm}p{4.3cm}p{4.6cm}@{}}
-\hline\noalign{\smallskip}
+\toprule
 Category & Scaling Driver & Typical Mitigation \\
-\noalign{\smallskip}\svhline\noalign{\smallskip}
+\midrule
 Parameters & $N$ and parameter precision & Tensor parallelism, FSDP, ZeRO-3, CPU or NVMe offload \\
 Gradients & $N$ and gradient precision & ZeRO-2/3, reduce-scatter, gradient accumulation \\
 Optimizer states & $2N$ or more for Adam-style methods & ZeRO optimizer partitioning, lower-precision states, optimizer choice \\
 Activations & $L B_{\mu} T H$ plus attention intermediates & Smaller micro-batch, activation checkpointing, sequence parallelism \\
 Communication buffers & Collective size and overlap strategy & Bucket sizing, topology-aware process groups, overlap tuning \\
 Temporary workspaces & Kernel and allocator behavior & Memory headroom, fused kernels, static shapes where possible \\
-\noalign{\smallskip}\hline
+\bottomrule
 \end{tabular}
 \end{table}
 
 \section{Data Parallelism}
+\index{data parallelism}\index{gradient synchronization}
 \label{sec:data-parallelism}
 
 Data parallelism replicates the model on each worker, gives each replica a different micro-batch, and averages gradients before the optimizer step. In synchronous data parallel training, the mathematical update is close to a larger batch on one device, assuming identical numerics and deterministic reduction. The main collective is an all-reduce over gradients:
@@ -87,6 +97,7 @@ The strength of data parallelism is simplicity. It preserves the local model cod
 Large data-parallel worlds also change optimization. If the global token batch grows with the number of workers, the number of optimizer updates for a fixed token budget falls. Learning-rate schedules, warmup, and gradient noise properties must be retuned. Scaling out a run is therefore both a systems change and an optimization change.
 
 \section{ZeRO and Fully Sharded Data Parallel}
+\index{ZeRO}\index{fully sharded data parallel}\index{sharding}
 \label{sec:zero-fsdp}
 
 ZeRO-style training partitions redundant data-parallel state across workers \cite{rajbhandari2020zero}. The usual stages are easiest to remember by what they shard:
@@ -99,23 +110,45 @@ The memory savings can be dramatic because Adam moments and gradients no longer 
 
 Fully Sharded Data Parallel (FSDP) is a widely used PyTorch implementation of this idea, especially close to ZeRO-3 in spirit \cite{zhao2023pytorchfsdp}. A module wrapped with FSDP stores only local parameter shards most of the time. Before the module's forward or backward computation, workers all-gather the full parameters needed for that module; after use, full parameters can be freed. Gradients are reduce-scattered so each rank keeps only its shard. Nested wrapping controls the granularity of gathering and freeing.
 
+PyTorch's newer FSDP2 interface makes that contract more explicit through \texttt{fully\_shard} and \texttt{DTensor} parameters~\cite{pytorch2026fsdp2}. During initialization, parameters are converted in place from ordinary tensors to sharded \texttt{DTensor}s on a device mesh. Forward and backward hooks all-gather parameters before computation, expose ordinary tensors while the module runs, and convert them back to sharded tensors after the computation. This means the optimizer must be constructed over the \texttt{DTensor} parameters, ordinary model calls with inputs must trigger the hooks, and a bottom-up wrapping order controls all-gather groups. FSDP2 also changes the checkpoint expectation: instead of treating a full state dict as the default export path, the run should record how sharded \texttt{DTensor} state is resharded, materialized, or handed to PyTorch Distributed Checkpoint APIs~\cite{pytorch2026distributedcheckpoint}.
+
+This is memory sharding, not the same thing as tensor-parallel compute sharding. A ZeRO-3 or FSDP worker may store only a shard between module calls, but the module still needs the full parameter view when its local computation runs. The method reduces persistent model-state memory; it does not by itself split a matrix multiplication into smaller matrix multiplications across ranks. Confusing these two facts leads to bad designs: ZeRO/FSDP is the right first lever when optimizer state or weights do not fit, while tensor parallelism is the right lever when individual layer computation or layer-local memory is the bottleneck.
+
+The later ZeRO family shows what happens after ordinary sharding moves the bottleneck from memory capacity to communication and data movement. ZeRO-Offload moves selected optimizer state, gradients, and computation to CPU memory to fit larger models on limited GPU memory, but it only helps when transfer and CPU work overlap with accelerator compute \cite{ren2021zerooffload}. ZeRO-Infinity extends the same idea to heterogeneous GPU, CPU, and NVMe memory, making storage hierarchy and prefetch granularity part of the training algorithm \cite{rajbhandari2021zeroinfinity}. ZeRO++ instead targets communication volume with block-quantized weight all-gather, hierarchical partitioning, and quantized gradient exchange \cite{wang2023zeropp}. The practical lesson is that ``fits in memory'' is not the end of the design: report PCIe or NVLink bandwidth, host-memory pressure, NVMe throughput if used, collective volume, overlap efficiency, and whether accuracy was checked against a non-compressed baseline.
+
+Baichuan 2 illustrates a pragmatic hybrid layout for dense multilingual models: tensor parallelism within an eight-GPU machine, ZeRO-style data parallelism across machines, tensor splitting for memory-heavy operations such as large-vocabulary cross entropy, topology-aware rank placement, and hybrid or hierarchical parameter partitioning to reduce interconnect pressure at larger scale \cite{yang2023baichuan2}. The transferable lesson is the placement rule, not the exact cluster. Keep layer-local tensor-parallel communication inside a fast island when possible, shard redundant state across the wider data-parallel group, and treat rank mapping and checkpoint export as part of the training recipe.
+
 The important design question is granularity. If wrapped units are too large, peak memory rises because full parameters for a large region are materialized at once. If units are too small, collective overhead and scheduling overhead increase. Transformer block wrapping is a common compromise. Auto-wrapping policies should be inspected, not trusted blindly, because shared embeddings, tied output heads, adapters, and mixture-of-experts layers can violate simple assumptions.
 
 FSDP also affects checkpointing. A full state dict is convenient for evaluation and sharing but expensive to materialize. A sharded state dict is efficient for resuming training but tied to metadata about world size, parameter flattening, and sharding layout. A robust training pipeline tests both resumption and export. It should be possible to recover the job after a node failure and separately export a canonical checkpoint for inference or post-training.
 
+ZeRO-3 plus parameter-efficient tuning adds another export contract. The training checkpoint may contain partitioned optimizer and adapter state rather than a directly loadable Hugging Face model. A release pipeline therefore has to reconstruct a full-precision state dict from the ZeRO shards, extract the PEFT adapter keys, preserve any saved modules such as a reward-model score head, and then decide whether to publish an adapter or merge it into the base model. The tokenizer and chat template must be copied with the exported artifact, because an adapter that loads successfully against the wrong base tokenizer can still produce invalid generations.
+
 \section{Tensor Parallelism}
+\index{tensor parallelism}\index{distributed training!tensor parallelism}\index{all-reduce}
 \label{sec:tensor-parallelism}
 
-Tensor parallelism splits individual layer computations across devices. Megatron-LM popularized practical tensor parallel layouts for \transformer language models \cite{shoeybi2019megatron}. For a linear layer $Y=XW$, column parallelism splits $W$ by output columns, so each device computes a shard of $Y$. Row parallelism splits $W$ by input rows, so devices compute partial outputs that must be summed. MLPs and attention projections can be arranged so some collectives are delayed or paired with the next operation.
+Tensor parallelism splits individual layer computations across devices. Megatron-LM popularized practical one-dimensional tensor parallel layouts for \transformer language models \cite{shoeybi2019megatron}. For a linear layer $Y=XW$, column parallelism splits $W$ by output columns, so each device computes a shard of $Y$. Row parallelism splits $W$ by input rows, so devices compute partial outputs that must be summed. MLPs and attention projections can be arranged so some collectives are delayed or paired with the next operation.
+
+The communication placement is the important part. In a two-layer MLP, the first projection is often column-parallel: each rank produces a different shard of the expanded hidden dimension, and the elementwise activation can run locally. The second projection is then row-parallel: each rank consumes its local hidden shard, computes a partial output in the original hidden dimension, and an all-reduce sums the partial outputs. Attention follows a similar idea by partitioning query, key, and value projections by attention head, then using a row-parallel output projection whose partial outputs must be reduced.
 
 The advantage is that very large layers can run when a single device cannot store or multiply the full matrices efficiently. Tensor parallelism also increases arithmetic capacity for one model replica. The cost is frequent communication inside the forward and backward pass. These collectives are latency-sensitive and topology-sensitive, so tensor-parallel groups are usually kept within a high-bandwidth island such as GPUs connected by NVLink or within one server. Spanning tensor parallelism across slower inter-node links can destroy utilization.
 
+Some libraries expose higher-dimensional variants beyond Megatron-style one-dimensional row and column partitioning. The OSLO tensor-model-parallel tutorial, for example, describes one-dimensional, two-dimensional, 2.5-dimensional, and three-dimensional tensor partitioning modes and treats tensor-parallel size, mode, depth, and process-group layout as explicit runtime configuration \cite{oslo2025tensorparallel}. These modes are not interchangeable switches: they change collective patterns, checkpoint layout, and the set of valid process groups. The same tutorial also exposes several operational constraints: the model is created on CPU before sharding, \texttt{tensor\_parallel\_size} must be positive, no larger than the available GPU count, and a power of two, \texttt{tensor\_parallel\_depth} is only meaningful for the 2.5D mode, and the shown tensor-parallel path does not mix with pipeline parallelism. Its default \texttt{save\_pretrained} output is a rank-sharded checkpoint with tensor, pipeline, and expert rank identifiers; exporting an ordinary checkpoint requires an explicit merge step. A training run should therefore log the tensor-parallel degree, mode, depth if used, data/pipeline/expert parallel degrees, rank mapping, and whether the saved checkpoint is sharded by tensor-parallel rank or exported as a merged model.
+
+PyTorch's newer tensor-parallel tutorials express the same idea through \texttt{DeviceMesh}, \texttt{DTensor}, and module-level parallel styles \cite{pytorch2025tptutorial,pytorch2025devicemesh}. A \texttt{DeviceMesh} names the process-group dimensions, so a two-dimensional layout can put tensor parallelism on an intra-host mesh and FSDP on an inter-host mesh instead of requiring hand-built process groups. A parallelization plan then maps submodules to \texttt{ColwiseParallel}, \texttt{RowwiseParallel}, \texttt{SequenceParallel}, or explicit input and output layout transforms. This makes shape contracts visible: a column-sharded Q/K/V projection shards the head dimension, so reshape operations, RoPE buffers, and local head counts must either be DTensor-aware or be rewritten for local shapes. If the model cannot even be instantiated in CPU memory before sharding, meta-device or layer-by-layer initialization becomes part of the recipe, not just an implementation detail.
+
 Attention introduces additional choices. Query, key, and value projections can be partitioned by head because different heads are mostly independent until output projection. Sequence parallelism splits some activation tensors along the sequence dimension to reduce replicated activation memory, but it adds collectives around operations that need full sequence or hidden dimensions. The implementation must align partitioning with kernel expectations; otherwise layout conversions can erase the intended savings.
 
+Sequence, loss, and context parallelism are worth separating. Sequence parallelism usually keeps block inputs and outputs sharded on the sequence dimension, applies it to normalization or dropout layers, and inserts layout conversions before attention and feed-forward modules. Loss parallelism keeps the large vocabulary logits sharded and computes cross entropy without first all-gathering full logits onto every rank, which is important for large vocabularies and tied output heads. Context parallelism instead targets very long sequences by sharding Q/K/V or other sequence buffers and replacing ordinary scaled-dot-product attention with a ring-attention variant; the PyTorch prototype exposes both all-gather and all-to-all KV rotation paths \cite{pytorch2025contextparallel}. Position-dependent buffers such as RoPE frequencies must be included in the same sequence sharding plan, or the attention output can be numerically wrong even though tensor shapes still match.
+
 \section{Pipeline Parallelism}
+\index{pipeline parallelism}\index{distributed training!pipeline parallelism}\index{microbatch}
 \label{sec:pipeline-parallelism}
 
 Pipeline parallelism partitions layers into stages. Stage 0 processes early layers, sends activations to stage 1, and so on. Backward sends gradients in the reverse direction. GPipe introduced a clean micro-batch pipeline approach for training very deep networks \cite{huang2019gpipe}. In language-model training, pipeline parallelism is often combined with tensor and data parallelism for large models \cite{narayanan2021efficient}.
+
+Recent PyTorch pipeline support exposes this as a split frontend plus a distributed runtime rather than only as hand-written send/receive code~\cite{pytorch2026pipelining}. The package is still documented as alpha, but its shape is useful for run-card design: the frontend records model partitions and data-flow relationships, while the runtime handles micro-batch splitting, scheduling, communication, and gradient propagation. Schedules such as GPipe, 1F1B, interleaved 1F1B, and Looped BFS are not only performance switches; they define activation lifetime, optimizer-step timing, cross-host traffic, and checkpoint reconstruction. TorchTitan's Llama training stack shows the same composition pressure in practice by combining FSDP2, tensor parallelism, pipeline parallelism, context parallelism, activation checkpointing, distributed checkpointing, float8 support, structured per-rank logging, and checkpointable data loading~\cite{pytorch2026torchtitan}.
 
 The basic problem is the pipeline bubble. If there are $S$ stages and only one micro-batch, most stages are idle most of the time. Splitting a batch into $M$ micro-batches fills the pipeline:
 \begin{equation}
@@ -125,18 +158,24 @@ for a simple schedule. More micro-batches reduce idle time but increase activati
 
 Stage balance is critical. A pipeline runs at the speed of its slowest stage. Embedding layers, output projections, attention-heavy long-context layers, and MoE layers can make equal layer counts unequal in runtime. A good partitioner measures real execution time and memory rather than assuming identical blocks. It also accounts for activation transfer sizes between stages.
 
+Modern sparse models add another reason to treat the schedule as a first-class algorithm. DeepSeek-V3 reports a DualPipe-style pipeline schedule designed to overlap forward, backward, and communication work in a setting that also uses expert and pipeline parallelism \cite{deepseek2024v3}. The general lesson is not that every system should copy one named schedule. It is that pipeline efficiency depends on micro-batch count, stage balance, activation transfer, all-to-all traffic, and whether communication can be overlapped with useful computation.
+
 Pipeline parallelism changes failure recovery and debugging. A NaN generated in one stage may only be observed downstream. A shape bug may depend on a boundary between stages. Logging must include stage rank, micro-batch id, and schedule step. Checkpoints must reconstruct partitioned modules correctly, especially if the model is later exported without pipeline partitioning.
 
 \section{Expert Parallelism}
+\index{expert parallelism}\index{mixture of experts!expert parallelism}\index{mixture of experts!routing}
 \label{sec:expert-parallelism}
 
 Mixture-of-experts models replace some dense feed-forward computation with a set of experts and a router. Each token is sent to one or more experts, so total parameters can be much larger than active parameters per token. Expert parallelism places different experts on different devices and uses all-to-all communication to move token representations to the devices that own the selected experts. GShard and later MoE systems made this style of conditional computation central to large sparse models \cite{lepikhin2020gshard,deepseek2024v3}.
 
 The systems challenge is load balance. If the router sends too many tokens to one expert, that expert becomes a straggler and may overflow its capacity. Load-balancing losses, capacity factors, token dropping policies, and auxiliary routing constraints are therefore part of the training system. They affect both optimization and throughput. A sparse model can have excellent nominal FLOPs per token and still run poorly if routing creates uneven all-to-all traffic.
 
+Recent DeepSeek-style training material makes this concrete: routed experts, shared experts, sequence-level balancing, and expert-parallel dispatch are not separable details. A load-balance mechanism that improves one batch shape may behave differently at batch size one, during long prefill, or under skewed domain mixtures. The training dashboard should therefore show expert token counts, routing entropy, capacity overflow or rerouting, all-to-all time, and per-expert gradient activity rather than only aggregate loss.
+
 Expert parallelism composes awkwardly with other strategies. Tensor-parallel experts require communication inside expert computation; data-parallel replicas need consistent router gradients; pipeline stages containing MoE layers may have variable runtime; sharded checkpointing must preserve expert placement and optimizer state. This is a case where the architecture and system are inseparable.
 
 \section{Activation Checkpointing and Recomputation}
+\index{activation checkpointing}\index{recomputation}
 \label{sec:activation-checkpointing}
 
 Activation checkpointing trades compute for memory. Instead of storing every intermediate activation needed for backward, the system stores selected checkpoints and recomputes missing intermediates during the backward pass. The general technique predates modern \llms and can reduce activation memory substantially at the cost of extra forward computation \cite{chen2016training}. In large \transformers, selective recomputation is often applied at the block level or to memory-heavy subcomponents.
@@ -146,9 +185,12 @@ The tradeoff is not simply ``30 percent more compute for less memory.'' Recomput
 The practical question is which activations are worth storing. Small cheap activations can be recomputed. Expensive or communication-heavy intermediates may be worth keeping. A measured memory profile is better than a uniform policy. Modern training stacks often expose several checkpointing modes; their names are less important than the actual saved tensors and recomputed graph.
 
 \section{Precision and Communication}
+\index{bfloat16}\index{communication bandwidth}\index{collective communication}
 \label{sec:precision-communication}
 
 Distributed training depends on both numerical precision and communication precision. FP32 remains common for optimizer moments and some reductions. BF16 is widely used for activations and weights because its exponent range is forgiving. FP16 can be efficient but often requires loss scaling. FP8 and related formats can improve throughput and reduce communication volume, but only when scaling, accumulation, and kernel support are mature enough for the architecture and hardware \cite{micikevicius2017mixed,deepseek2024v3}.
+
+An FP8 claim should specify more than the format name. The report should say which tensors are stored in FP8, which matrix multiplications use FP8 inputs, which accumulations use higher precision, how scales are computed and updated, and which validation slices were compared against BF16 or FP16 baselines. For sparse models, precision interacts with router logits, load-balancing losses, expert gradients, and communication compression, so a stable dense recipe may not transfer unchanged.
 
 Collectives are the language of distributed training:
 \begin{description}
@@ -157,20 +199,25 @@ Collectives are the language of distributed training:
 \item[All-gather] Shards are gathered so every rank receives the full tensor. Used before FSDP module computation.
 \item[All-to-all] Each rank sends different slices to different ranks. Used heavily in expert parallelism.
 \item[Broadcast] One rank sends the same tensor to others. Used for initialization and some checkpoint flows.
+\item[Point-to-point] One rank sends to another rank. Used to build custom schedules, pipeline transfers, or debugging harnesses.
+\item[Scatter/Gather] One rank splits a tensor across ranks, or collects rank-local tensors back to one rank. Useful for data movement and export paths, but rarely the main high-throughput training primitive.
 \end{description}
 The same collective can have different cost depending on message size, topology, contention, and overlap. For example, a small all-reduce may be latency-dominated, while a large reduce-scatter may be bandwidth-dominated.
 
-Overlap is the main performance technique. During backward, gradients for later layers become available before earlier layers finish. A system can launch communication for ready gradient buckets while computation continues. FSDP can prefetch upcoming parameter shards. Pipeline parallelism can overlap different micro-batches. Overlap is fragile: a bucket that is too large starts late; a bucket that is too small has high launch overhead; a dependency inserted by logging, synchronization, or shape conversion can serialize the step.
+Collective names describe semantics, not the algorithm used on the wire. An all-reduce may be implemented with a ring, tree, hierarchical intra-node plus inter-node schedule, or hardware-specific path such as NVLink/NVSwitch. A ring all-reduce is bandwidth efficient for large messages because each rank sends and receives chunks around the ring, but it is not automatically best for small latency-sensitive buckets. Training reports should therefore state the communication backend, topology, bucket sizes, and whether collectives are measured on the target cluster rather than assumed from a toy benchmark.
+
+Overlap is the main performance technique. During backward, gradients for later layers become available before earlier layers finish. A system can launch communication for ready gradient buckets while computation continues. FSDP can prefetch upcoming parameter shards. Pipeline parallelism can overlap different micro-batches. Overlap is fragile: a bucket that is too large starts late; a bucket that is too small has high launch overhead; a dependency inserted by logging, synchronization, or shape conversion can serialize the step. Nonblocking send, receive, or collective APIs create only the opportunity for overlap; the program must delay the corresponding wait until useful independent computation has run. Ranks in the same process group must still call compatible collectives in compatible order, or a fast-looking asynchronous schedule becomes a deadlock.
 
 \section{Throughput Accounting}
+\index{model FLOPs utilization}\index{throughput}\index{pipeline bubble}
 \label{sec:throughput-accounting}
 
 Training performance should be reported in tokens per second, time per optimizer step, and model FLOPs utilization. Tokens per second is directly tied to the training budget. Step time is useful for debugging schedules and checkpoint cadence. MFU estimates how much of the hardware's theoretical compute is used for model-relevant operations:
 \begin{equation}
   \mathrm{MFU}
   =
-  \frac{\mathrm{estimated\ model\ FLOPs\ per\ step}}
-       {\mathrm{step\ time}\times \mathrm{peak\ hardware\ FLOPs}}.
+  \mathrm{estimated\ model\ FLOPs\ per\ step}/
+  (\mathrm{step\ time}\times \mathrm{peak\ hardware\ FLOPs}).
 \end{equation}
 The numerator is usually approximate, so MFU should be treated as an engineering diagnostic rather than a precise physical measurement.
 
@@ -178,30 +225,35 @@ End-to-end throughput includes data loading, host-to-device transfer, forward, b
 
 Stragglers matter because synchronous training waits. A slow data-loader worker, a thermal-throttled GPU, a congested network path, or a filesystem pause can reduce the throughput of the whole job. Logs should make per-rank timing visible. If only the master rank logs averaged step time, the slow rank can remain hidden until utilization is already poor.
 
+Table~\ref{tab:parallelism-tradeoffs} summarizes the main savings and costs of the strategies discussed in this chapter.
+
 \begin{table}[t]
 \caption{Parallelism strategies and their primary tradeoffs.}
 \label{tab:parallelism-tradeoffs}
 \small
 \begin{tabular}{@{}p{2.5cm}p{2.9cm}p{2.7cm}p{2.8cm}@{}}
-\hline\noalign{\smallskip}
+\toprule
 Strategy & Main Saving & Main Cost & Best First Use \\
-\noalign{\smallskip}\svhline\noalign{\smallskip}
+\midrule
 Data parallel & More token throughput & Replicated model state, gradient all-reduce & Model fits per device, batch should scale \\
 ZeRO/FSDP & Shards optimizer, gradients, parameters & All-gather and reduce-scatter, checkpoint complexity & Model state exceeds memory \\
 Tensor parallel & Splits large layer compute/state & Frequent intra-layer collectives & Layers too large or too slow on one GPU \\
 Pipeline parallel & Splits depth and activation footprint & Pipeline bubbles, stage balance & Deep model cannot fit as one partition \\
 Expert parallel & Splits sparse experts & All-to-all, load balance & MoE model with many experts \\
 Activation checkpointing & Reduces saved activations & Recomputation and determinism constraints & Activation memory dominates \\
-\noalign{\smallskip}\hline
+\bottomrule
 \end{tabular}
 \end{table}
 
 \section{Operational Reliability}
+\index{fault tolerance}\index{checkpoint restart}\index{straggler}
 \label{sec:training-operational-reliability}
 
 Large training jobs fail often enough that failure recovery is part of the design. A reliable run has a launch manifest, immutable code reference, environment capture, data manifest, checkpoint policy, health checks, and runbook. The runbook should say what to do for a single-rank failure, repeated out-of-memory errors, NaNs, slow filesystem writes, degraded network links, and validation regressions. Waiting until failure occurs is expensive because hundreds or thousands of accelerators may sit idle while the team debates whether a checkpoint is trustworthy.
 
 Checkpointing must match the parallel layout. Data-parallel checkpoints can be simple full replicas. FSDP and ZeRO checkpoints may be sharded. Tensor-parallel checkpoints must preserve partitioned weight layouts. Pipeline-parallel checkpoints must map layers to stages. Expert-parallel checkpoints must preserve expert identities and optimizer shards. When changing world size for resumption, the system may need a conversion step. That conversion should be tested with small models before it is needed in an emergency.
+
+Distributed Checkpoint APIs make this layout contract explicit instead of hiding it behind \texttt{torch.save}~\cite{pytorch2026distributedcheckpoint}. A state-dict interface can process modules composed from FSDP, \texttt{fully\_shard}, DDP, and tensor-parallel wrappers, but the checkpoint still needs a storage writer, a planner, metadata, and a load path tested under the intended topology. Asynchronous checkpointing is also not free: \texttt{async\_save} separates staging completion from upload completion, and the default path may still copy data from accelerator memory to CPU memory before the background write. Newer staging helpers can move that copy to a background thread, but the runbook must still budget CPU RAM, outstanding writes, synchronization points, and what happens if training fails while an upload is in flight~\cite{pytorch2026asynccheckpoint}.
 
 Data-loader reliability is a frequent bottleneck. Tokenized shards should include checksums, lengths, and format versions. The sampler should be able to resume at a token-accurate or shard-accurate position. If workers independently shuffle without a coordinated seed and epoch definition, resumption may repeat or skip data. If remote storage is used, caching policy and backpressure should be measured. A model can only train as fast as tokens arrive.
 
@@ -224,6 +276,7 @@ Several checks catch serious bugs early:
 These tests are cheaper than discovering the same problems during a full run.
 
 \section{A Systems Design Checklist}
+\index{capacity planning}\index{systems checklist}
 \label{sec:distributed-systems-design-checklist}
 
 A publishable systems section should expose the following quantities, because they determine whether the reported model is reproducible rather than merely impressive:
@@ -242,10 +295,15 @@ where the $P$ terms are data, tensor, pipeline, and expert parallel degrees, $M_
 \item[All-gather] A collective in which ranks exchange shards so every rank obtains the full tensor.
 \item[All-reduce] A collective in which ranks receive the reduction of all contributed tensors.
 \item[Data parallelism] Replicating the model across workers and averaging gradients across different data shards.
+\item[Distributed Checkpoint] A checkpointing API and file format discipline for saving and loading sharded model, optimizer, and metadata state under distributed parallel layouts.
 \item[Expert parallelism] Placing different MoE experts on different devices and routing token representations to them.
 \item[FSDP] Fully Sharded Data Parallel, a sharded training method that keeps only local shards of model state when full parameters are not needed.
+\item[FSDP2] A newer PyTorch \texttt{fully\_shard} interface that represents sharded parameters as \texttt{DTensor}s and uses hooks to materialize ordinary tensors around module computation.
 \item[Pipeline bubble] Idle time caused by filling and draining pipeline-parallel stages.
 \item[Tensor parallelism] Splitting individual layer tensors and computations across devices.
+\item[Tensor-parallel checkpoint] A checkpoint whose tensors are saved by tensor-parallel rank and must be resumed with compatible layout metadata or merged before ordinary inference export.
+\item[Communication overlap] Scheduling communication and computation so one hides behind the other instead of serializing the step.
+\item[ZeRO-Offload] A ZeRO-style method that moves selected model state and optimizer work through CPU memory to reduce GPU memory pressure.
 \end{description}
 
 \section{Exercises}
@@ -253,9 +311,15 @@ where the $P$ terms are data, tensor, pipeline, and expert parallel degrees, $M_
 
 \begin{enumerate}
 \item Estimate persistent training memory for a 13-billion-parameter dense model using BF16 parameters, BF16 gradients, FP32 Adam moments, and FP32 master weights. Then estimate per-rank persistent memory under ZeRO-1, ZeRO-2, and ZeRO-3 for $P=16$, ignoring activations and buffers.
+\item Explain why ZeRO-3 can make a model fit in memory without reducing the arithmetic work of a single dense layer. When would tensor parallelism still be needed?
 \item A model trains with $8$ pipeline stages and $32$ micro-batches. Estimate the simple pipeline bubble fraction. How does the fraction change with $8$ micro-batches, and what other costs might increase when using $32$?
+\item For a pipeline-plus-expert-parallel sparse model, list the measurements needed to decide whether a DualPipe-style overlapped schedule is helping or merely hiding communication in averaged step time.
 \item For an MLP block with two linear layers, describe one column-parallel and one row-parallel layout. State where all-reduce or all-gather operations are required.
+\item A tensor-parallel library saves files by TP, PP, and EP rank. List the metadata needed to resume training, and explain why a separate merge step may be needed before serving the model with a standard inference stack.
 \item Design a process-group layout for $128$ GPUs arranged as $16$ nodes with $8$ GPUs per node. Choose data, tensor, and pipeline parallel degrees for a dense model and justify which collectives stay within a node.
 \item A training job has stable loss but tokens per second drops by $25$ percent after two hours. List at least six metrics or logs you would inspect to distinguish data loading, network, checkpointing, thermal, and straggler causes.
 \item Explain why a sharded checkpoint that resumes training correctly may still be unsuitable for inference export. What metadata or conversion step is needed?
+\item Design a minimal FSDP2 run card. Include device mesh dimensions, bottom-up \texttt{fully\_shard} wrapping order, optimizer construction point, checkpoint API, resharding or export path, and the test that proves an ordinary model call with inputs triggers the needed all-gather hooks.
+\item Compare two pipeline schedules, such as GPipe and 1F1B, for the same layer partition. What measurements would show whether the schedule improved throughput without breaking activation lifetime, optimizer-step timing, or checkpoint reconstruction?
+\item Write a failure scenario for asynchronous distributed checkpointing. State how the runbook distinguishes staging completion, upload completion, durable metadata, and whether the next launch should resume from the last complete checkpoint or discard a partial write.
 \end{enumerate}

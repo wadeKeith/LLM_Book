@@ -1,9 +1,12 @@
 \chapter{LLaMA-Class Architectures}
 \label{ch:llama-class-architectures}
 
-\abstract{This chapter studies the architectural conventions used by modern open decoder models: RMSNorm, RoPE, SwiGLU-style feed-forward networks, grouped-query attention, KV cache design, long-context extensions, and mixture-of-experts variants. LLaMA-class models are not a different species from GPT; they are a refined decoder-only recipe whose details change stability, memory, throughput, and context behavior.}
+\abstract{This chapter studies the architectural conventions used by modern open decoder models: RMSNorm, RoPE and YaRN-style scaling, SwiGLU-style feed-forward networks, grouped-query attention, KV cache design, latent attention variants, long-context extensions, and mixture-of-experts variants. LLaMA-class models are not a different species from GPT; they are a refined decoder-only recipe whose details change stability, memory, throughput, and context behavior.}
+
+\paragraph{Chapter contract.} The reader should leave this chapter able to compare LLaMA-class architectural choices against the basic GPT contract from the previous chapter, quantify their training and serving consequences, and ask which evidence is needed before treating a design as an improvement.
 
 \section{What Makes a Decoder LLaMA-Class}
+\index{LLaMA}\index{modern decoder}\index{decoder-only Transformer}
 \label{sec:what-makes-llama-class}
 
 Modern open \llms are mostly decoder-only \transformers, but the defaults have changed since early GPT implementations. LLaMA and its successors popularized a compact recipe: pre-normalized decoder blocks, RMSNorm, rotary position embeddings, bias-free linear layers, SwiGLU-style feed-forward networks, careful tokenizer and data choices, and post-training pipelines that make the base model usable as an assistant \cite{touvron2023llama,touvron2023llama2,dubey2024llama3}. Later families add grouped-query attention, longer context, stronger multilingual and code mixtures, tool-oriented post-training, and sparse mixture-of-experts variants \cite{ainslie2023gqa,deepseek2024v3,kimi2025k2}.
@@ -12,12 +15,14 @@ A LLaMA-class block can be written as
 \begin{align}
   y^{(\ell)}
     &= x^{(\ell)} +
-       \mathrm{Attn}\left(\mathrm{RMSNorm}(x^{(\ell)})\right),\\
+       \mathrm{Attn}(\mathrm{RMSNorm}(x^{(\ell)})),\\
   x^{(\ell+1)}
     &= y^{(\ell)} +
-       \mathrm{SwiGLU}\left(\mathrm{RMSNorm}(y^{(\ell)})\right).
+       \mathrm{SwiGLU}(\mathrm{RMSNorm}(y^{(\ell)})).
 \end{align}
 This is still the residual-stream structure from Chapter~\ref{ch:transformer-mechanics}. The significance is in the defaults. RMSNorm changes normalization cost and behavior; RoPE changes where positions enter attention; SwiGLU changes MLP expressivity and parameter allocation; grouped-query attention changes the KV-cache budget. These are not cosmetic differences when training or serving billions of parameters.
+
+Figure~\ref{fig:llama-class-block} summarizes the coupled defaults that make a decoder LLaMA-class in practice.
 
 \begin{figure}[t]
 \centering
@@ -45,11 +50,13 @@ This is still the residual-stream structure from Chapter~\ref{ch:transformer-mec
 \node[llmnote, below=8mm of ffn, text width=0.70\textwidth] {The LLaMA-class recipe is a set of coupled defaults. Changing GQA changes serving memory; changing RoPE changes long-context behavior; changing SwiGLU or MoE changes parameter allocation and communication.};
 \end{tikzpicture}
 }
+\Description{Block diagram of a decoder layer in which the residual stream passes through RMSNorm, RoPE-modified query and key vectors, grouped-query attention, another RMSNorm, and a SwiGLU or mixture-of-experts feed-forward layer.}
 \caption{A LLaMA-class decoder block as a contract among normalization, position handling, attention cache structure, and feed-forward capacity. The drawing abstracts from LLaMA, Llama 2/3, DeepSeek-V3, and Kimi K2-style reports without copying any released architecture figure.}
 \label{fig:llama-class-block}
 \end{figure}
 
 \section{RMSNorm and Pre-Normalization}
+\index{RMSNorm}\index{normalization!RMSNorm}\index{pre-normalization}
 \label{sec:llama-rmsnorm-prenorm}
 
 RMSNorm rescales a hidden vector without subtracting its mean \cite{zhang2019root}. For $h\in\mathbb{R}^{d}$,
@@ -67,42 +74,57 @@ Pre-normalization means the attention and MLP sublayers see normalized inputs, w
 RMSNorm is easy to implement incorrectly in mixed precision. The mean of squares should usually be accumulated in a sufficiently stable dtype, and $\epsilon$ should match the checkpoint family. Changing $\epsilon$ or whether the scale is applied before or after casting can produce small logit differences that become visible during long autoregressive generation.
 
 \section{SwiGLU Feed-Forward Networks}
+\index{SwiGLU}\index{feed-forward network}\index{feed-forward network!SwiGLU}
 \label{sec:llama-swiglu}
 
 The simple GPT MLP expands from $d$ to $4d$, applies GELU, and projects back to $d$. LLaMA-class models often use a gated feed-forward network inspired by GLU variants \cite{shazeer2020glu}:
 \begin{equation}
   \mathrm{FFN}(h)
-  = W_o\left(\mathrm{SiLU}(W_g h) \odot W_u h\right).
+  = W_o(\mathrm{SiLU}(W_g h) \odot W_u h).
   \label{eq:swiglu-llama}
 \end{equation}
-There are two input projections, $W_g$ and $W_u$, and one output projection, $W_o$. To keep parameter count near the ungated $4d$ MLP, the hidden width is often set near $\frac{8}{3}d$ and rounded to a hardware-friendly multiple. The gate lets the model modulate candidate features elementwise, while the up projection supplies the candidate values.
+There are two input projections, $W_g$ and $W_u$, and one output projection, $W_o$. To keep parameter count near the ungated $4d$ MLP, the hidden width is often set near $(8/3)d$ and rounded to a hardware-friendly multiple. The gate lets the model modulate candidate features elementwise, while the up projection supplies the candidate values.
 
-The feed-forward block is often the largest parameter component of a dense decoder layer. With hidden width $m$, the gated MLP has approximately $3dm$ weights, ignoring biases. A standard $4d$ MLP has approximately $8d^2$ weights. Setting $m\approx \frac{8}{3}d$ makes these comparable. Rounding $m$ upward can improve tensor-core utilization but changes parameter count, activation memory, and checkpoint size.
+The feed-forward block is often the largest parameter component of a dense decoder layer. With hidden width $m$, the gated MLP has approximately $3dm$ weights, ignoring biases. A standard $4d$ MLP has approximately $8d^2$ weights. Setting $m\approx (8/3)d$ makes these comparable. Rounding $m$ upward can improve tensor-core utilization but changes parameter count, activation memory, and checkpoint size.
 
 \section{Rotary Position Embeddings}
+\index{rotary position embedding}\index{rotary position embedding!scaling}\index{rotary position embedding!NTK scaling}\index{NTK scaling}
 \label{sec:llama-rope}
 
-RoPE applies a position-dependent rotation to query and key vectors before the attention dot product \cite{su2021roformer}. Pair adjacent dimensions and rotate each pair by angle $m\theta_i$ at position $m$:
+RoPE applies a position-dependent rotation to query and key vectors before the attention dot product \cite{su2021roformer}. Pair adjacent dimensions and rotate each pair by angle $m\theta_i$ at position $m$. For a two-coordinate pair $u_{2i},u_{2i+1}$, the rotated coordinates are
 \begin{equation}
-  R_{m,i} =
-  \begin{bmatrix}
-  \cos(m\theta_i) & -\sin(m\theta_i)\\
-  \sin(m\theta_i) & \cos(m\theta_i)
-  \end{bmatrix}.
+  u'_{2i} = u_{2i}\cos(m\theta_i) - u_{2i+1}\sin(m\theta_i),
+  \qquad
+  u'_{2i+1} = u_{2i}\sin(m\theta_i) + u_{2i+1}\cos(m\theta_i).
 \end{equation}
 If a query at position $m$ and a key at position $n$ are rotated, their dot product contains
 \begin{equation}
-  (R_m q)^{\top}(R_n k)
+  {(R_m q)}^{\top}(R_n k)
   = q^{\top}R_m^{\top}R_n k,
 \end{equation}
 and $R_m^{\top}R_n$ depends on the relative offset $n-m$. This is the geometric reason RoPE gives attention access to relative position while remaining compatible with standard dot-product attention.
 
 RoPE is not a free long-context solution. A model trained up to one context length has learned to use a particular range of rotation phases. Extrapolating to much longer contexts can create phase patterns that were rare or absent during training. Long-context extensions use methods such as position interpolation, frequency scaling, continued training, sliding attention, or attention biases. ALiBi is a contrasting approach that adds linear distance biases rather than rotating query and key vectors \cite{press2021train}. The evaluation question is not whether a model accepts a longer input tensor, but whether it uses distant evidence reliably without damaging shorter-context behavior.
 
+Baichuan 2 is a useful reminder that position handling is an architecture choice, not a family label. Its 7B model uses RoPE while its 13B model uses ALiBi, partly to study both multiplication-based and bias-based attention paths in otherwise related multilingual models \cite{yang2023baichuan2}. Such a report should not be reduced to ``LLaMA-like'' or ``not LLaMA-like.'' The positional method affects kernel compatibility, attention masks, long-context extrapolation, and what must be tested during cached decoding.
+
+YaRN-style RoPE extension makes this tradeoff more concrete \cite{peng2023yarn}. Instead of applying one uniform interpolation rule to all rotary dimensions, it treats dimensions by frequency band. The wavelength of dimension $i$ is approximately
+\begin{equation}
+  \lambda_i = \frac{2\pi}{\theta_i},
+\end{equation}
+so high-frequency dimensions complete many rotations within the original context and are important for short-range position modeling, while low-frequency dimensions change slowly and carry longer-range information. YaRN preserves high-frequency components, interpolates low-frequency components, blends the middle band, and rescales attention scores so the longer context does not make attention excessively diffuse. A model report that uses YaRN, NTK-aware RoPE, or another scaling rule should state the original training context, target context, scaling factor, frequency-band rule, whether scaling is static or dynamic at inference time, and how short-context regression was tested.
+
+Position interpolation and NTK-aware RoPE are not strict train-free extrapolation. Position interpolation replaces $m$ by $m/s$, which keeps positions inside a familiar range but compresses high-frequency dimensions as well as low-frequency ones. NTK-aware scaling changes the RoPE base so interpolation strength grows from high to low frequency, preserving short-range phases better than a uniform scale but still changing the query/key distribution. In practice, long-context reports should treat these changes as a continued-training or adaptation recipe unless they show strong no-training evidence across short- and long-context slices.
+
 \paragraph{Implementation note.}
 RoPE caches must align with the decode cache. In prefill, positions are usually $0,\ldots,T-1$. In cached decoding, the new token's query and key must use the next logical position, not position 0. A one-token error can be almost invisible on short prompts and severe on long generations.
 
+Independent LLaMA implementations make this alignment an API rather than an aside \cite{lightning2023litllama}. A common pattern is to precompute a RoPE cache and a lower-triangular mask cache up to \texttt{block\_size}; during prefill the model slices the first $T$ positions, while during cached decoding it selects rows by an explicit \texttt{input\_pos}. If the runtime also supports a fixed \texttt{max\_seq\_length}, then reaching the limit may roll the KV cache left and overwrite the final slot. That is a sliding-window policy, not just an optimization, and it should be reported because it defines which earlier tokens are no longer visible.
+
+Several notebook-scale LLaMA implementations reveal easy mistakes. RoPE is parameterized by head dimension, not model hidden width, and one sine/cosine cache is usually shared across heads and stored as a non-trainable buffer. RoPE is applied to query and key, not value; cached keys should use the same rotated representation that attention reads at decode time. Attention scores should be divided by $\sqrt{d_h}$, not $\sqrt{d_{\mathrm{model}}}$, after heads are split. For GQA, repeating KV heads with \texttt{repeat\_interleave} is a convenient educational way to show sharing before the dot product, but the serving cache should store only $H_{\mathrm{kv}}$ heads. Physically expanding cached keys and values back to $H_q$ heads gives up much of the memory and bandwidth benefit.
+
 \section{KV Cache and Attention Variants}
+\index{KV cache}\index{KV cache!attention variants}\index{KV cache!multi-query attention}\index{KV cache!grouped-query attention}\index{multi-query attention}\index{grouped-query attention}\index{attention!multi-query attention}\index{attention!grouped-query attention}\index{multi-head attention}\index{multi-head latent attention}
 \label{sec:llama-kv-cache-attention-variants}
 
 During autoregressive decoding, every layer stores keys and values from previous tokens. For a dense model with $L$ layers, batch $B$, context length $T$, head dimension $d_h$, and $H_{\mathrm{kv}}$ key-value heads, the approximate cache memory is
@@ -113,34 +135,46 @@ During autoregressive decoding, every layer stores keys and values from previous
 \end{equation}
 where $s$ is bytes per element. Multi-head attention has $H_{\mathrm{kv}}=H_q$, one KV head per query head. Multi-query attention shares a single KV head across all query heads, reducing cache memory and memory bandwidth during decoding \cite{shazeer2019fast}. Grouped-query attention uses an intermediate number of KV heads, grouping several query heads per KV head, and often preserves more quality than full multi-query attention at similar serving benefits \cite{ainslie2023gqa}.
 
+Table~\ref{tab:attention-variants-kv} compares the attention variants by the KV-cache structure they impose.
+
 \begin{table}[t]
 \caption{Attention variants by KV-cache structure.}
 \label{tab:attention-variants-kv}
 \small
 \begin{tabular}{@{}p{2.8cm}p{2.2cm}p{3.5cm}p{3.1cm}@{}}
-\hline\noalign{\smallskip}
+\toprule
 Variant & KV Heads & Main Benefit & Main Risk \\
-\noalign{\smallskip}\svhline\noalign{\smallskip}
+\midrule
 Multi-head attention & $H_q$ & Maximum per-head KV flexibility & Largest decode cache and bandwidth \\
 Multi-query attention & $1$ & Very small KV cache & Quality loss on some tasks or scales \\
 Grouped-query attention & $1 < H_{\mathrm{kv}} < H_q$ & Good memory-quality tradeoff & Requires compatible checkpoint design \\
 Latent or compressed attention & Model-specific & Smaller or transformed memory state & Harder to compare semantics and kernels \\
-\noalign{\smallskip}\hline
+\bottomrule
 \end{tabular}
 \end{table}
 
 Equation~\ref{eq:llama-kv-cache} explains why grouped-query attention became a practical default. Weight memory is paid once per loaded model replica, but KV memory grows with active batch and context. In a long-context serving system, KV cache can dominate capacity. Reducing $H_{\mathrm{kv}}$ improves throughput not only by saving memory, but also by reducing memory bandwidth in token-by-token decoding.
 
-Some newer architectures go beyond GQA with latent or compressed attention states, specialized cache layouts, or sparse attention patterns \cite{deepseek2024v3}. These variants should be evaluated under the exact serving regime of interest. A method that improves peak throughput for long prompts may add overhead for short prompts; a cache compression that preserves average benchmark scores may fail on retrieval-heavy tasks requiring exact distant evidence.
+Some newer architectures go beyond GQA with latent or compressed attention states, specialized cache layouts, or sparse attention patterns \cite{deepseek2024v3}. DeepSeek-V3's multi-head latent attention is a useful example: instead of storing ordinary per-head key and value tensors, the model compresses part of the attention state into low-rank latent variables and then reconstructs the quantities needed for attention. This is closer to changing the cache representation than merely reducing the number of KV heads. It also creates implementation details that must be reported: latent dimension, which components receive RoPE, whether latent states or reconstructed keys are cached, and which kernels support the layout.
+
+An MLA implementation should state exactly what is cached. Caching reconstructed multi-head keys and values gives up most of the memory gain; the intended serving path caches the compressed KV latent and the decoupled RoPE key, then reconstructs or absorbs the remaining projections when attention is computed. The RoPE split is not cosmetic: if the position-sensitive key component is left inside the low-rank reconstruction, every decode step may require recomputing rotated keys for the whole prefix. Matrix absorption, such as folding key-up or value-up projections into the query or output paths after training, is therefore part of the inference contract, not only an algebraic simplification.
+
+These variants should be evaluated under the exact serving regime of interest. A method that improves peak throughput for long prompts may add overhead for short prompts; a cache compression that preserves average benchmark scores may fail on retrieval-heavy tasks requiring exact distant evidence. The comparison should therefore include cache bytes per active token, prefill/decode latency, long-context retrieval accuracy, and whether the implementation depends on custom attention kernels.
 
 \section{Tokenizer and Vocabulary Contracts}
+\index{vocabulary}\index{byte fallback}\index{chat template}
 \label{sec:llama-tokenizer-vocabulary-contracts}
 
 LLaMA-class checkpoints inherit the tokenizer-model coupling from Chapter~\ref{ch:tokens-corpora-training-signals}. The vocabulary determines embedding and output projection shapes, special-token ids, chat-template conventions, and token efficiency. Open model families often change tokenizer vocabularies across generations to improve multilingual and code coverage. Such changes are architectural from the checkpoint's point of view: the embedding table, output head, and all learned token statistics are tied to the tokenizer.
 
+Baichuan 2 makes the multilingual version of this contract concrete. It expands the vocabulary to 125,696 tokens, uses SentencePiece BPE without text normalization, splits numbers into individual digits, adds whitespace-only tokens for code, and relies on byte fallback for rare characters \cite{yang2023baichuan2}. These are not preprocessing trivia. Digit splitting changes arithmetic and numeric copy behavior; whitespace tokens affect code generation; byte fallback defines how rare names and mixed-script text survive tokenization; and a larger vocabulary changes embedding, output-head, and softmax costs.
+
 Vocabulary size is also a systems parameter. Embedding and output matrices scale as $Vd_{\mathrm{model}}$. During training, the final softmax over $V$ can be expensive; during inference, logits processors and sampling operate over $V$ each step. Implementations often pad vocabulary size to a multiple that improves matrix-kernel efficiency. Padding rows must not become ordinary sampled tokens.
 
+Checkpoint conversion is part of this contract. For example, a lightweight implementation may store Q, K, and V as one stacked projection for code simplicity, while a source checkpoint stores separate matrices or multiple model-parallel shards. Converting such weights requires concatenating or reordering tensors along the correct dimension, preserving the tokenizer file, and distinguishing true vocabulary size from padded vocabulary size. If the converted checkpoint can generate text but its parameter accounting, sampling mask, or tensor-parallel merge metadata is wrong, later fine-tuning and serving failures become hard to diagnose.
+
 \section{Long Context}
+\index{long-context model}\index{position extrapolation}\index{context window}
 \label{sec:llama-long-context}
 
 Long context has three separate meanings. The first is acceptance: the model can run a forward pass at length $T$. The second is retrieval: the model can identify relevant information somewhere in that context. The third is reasoning or synthesis: the model can combine distant evidence correctly. Many failures occur because a system demonstrates the first and claims the third.
@@ -150,6 +184,7 @@ Training for long context increases attention cost, activation memory, data requ
 Serving long context is dominated by prefill and cache pressure. Prefill cost grows with the prompt length and full attention pattern; decode cost grows with cache length. Sliding-window attention, retrieval-augmented generation, summary memory, and cache eviction policies are alternatives to simply increasing $T_{\max}$. These alternatives change the task semantics and should be exposed in evaluation.
 
 \section{Mixture-of-Experts Variants}
+\index{mixture of experts}\index{mixture of experts!sparse routing}\index{mixture of experts!router}\index{mixture of experts!expert parallelism}\index{sparse MoE}\index{router}\index{expert parallelism}
 \label{sec:llama-moe-variants}
 
 Mixture-of-experts (MoE) models replace some dense feed-forward computation with a set of expert networks and a router. For token hidden state $h_t$, a router produces scores over experts. A top-$k$ router selects a small subset $S_t$ and computes
@@ -161,9 +196,12 @@ where $E_e$ is expert $e$ and $\alpha_{t,e}$ is a routing weight. The model can 
 
 Sparse computation has failure modes that dense models do not. Routers can collapse onto a few experts, leaving others undertrained. Load-balancing losses can improve hardware utilization while interfering with specialization. Expert parallelism introduces all-to-all communication across devices. Capacity limits can drop or reroute tokens. Evaluation can hide these problems if it reports only aggregate accuracy rather than per-domain behavior, routing distribution, latency percentiles, and failure cases.
 
-MoE models such as DeepSeek-V3 and Kimi K2-style systems show how sparse scaling can support strong open-weight performance claims, but the systems contract is more complex than a dense LLaMA-class model \cite{deepseek2024v3,kimi2025k2}. A publishable comparison should specify active parameters, total parameters, context length, data mixture where known, post-training recipe, inference budget, and serving hardware.
+MoE models such as DeepSeek-V3 and Kimi K2-style systems show how sparse scaling can support strong open-weight performance claims, but the systems contract is more complex than a dense LLaMA-class model \cite{deepseek2024v3,kimi2025k2}. DeepSeek-style MoE designs also illustrate that routing policy is part of the architecture, not only a systems afterthought. Shared experts, routed experts, top-$k$ selection, sequence-level load balancing, expert-parallel placement, and auxiliary or bias-based balance mechanisms all change which tokens update which experts and which devices become bottlenecks.
+
+A publishable comparison should specify active parameters, total parameters, context length, data mixture where known, post-training recipe, inference budget, and serving hardware. For sparse models it should additionally report number of experts, selected experts per token, shared-expert capacity, routing distribution, load-balance objective or bias update rule, token dropping or rerouting policy, and all-to-all communication cost. Without these details, a model-size number can hide both the real compute used per token and the real reason a sparse model is fast or slow.
 
 \section{Beyond the LLaMA-Class Decoder}
+\index{hybrid architecture}\index{attention alternative}
 \label{sec:beyond-llama-class-decoder}
 
 Decoder-only \transformers remain the reference architecture for most deployed \llms, but they are not the only plausible sequence backbone.\index{state-space model}\index{Mamba}\index{RetNet} Retentive networks, selective state-space models, and hybrid memory architectures try to change the long-context cost model by replacing all-pairs attention with recurrent or chunkwise state updates \cite{sun2023retnet,gu2023mamba,dao2024mamba2,behrouz2025titans}. The attraction is clear: if a model can summarize the prefix into a compact recurrent state, decoding no longer needs a KV cache that grows linearly with every past token in every layer.
@@ -173,6 +211,7 @@ These architectures should be compared by contract, not by slogan. Attention exp
 For a book about \llms, the practical conclusion is conservative. These models are essential frontier material for long-context and streaming systems, but a replacement claim needs evidence at comparable data scale, tokenizer, training budget, context distribution, and serving workload. Many promising sequence models win on asymptotic or medium-scale efficiency but must still prove broad instruction following, retrieval fidelity, tool use, and post-training compatibility at frontier scale.
 
 \section{Evaluation Cautions}
+\index{long-context evaluation}\index{architecture benchmark}
 \label{sec:llama-evaluation-cautions}
 
 Architecture claims should be tested under matched training and serving budgets. Replacing LayerNorm with RMSNorm, GELU with SwiGLU, MHA with GQA, or absolute positions with RoPE changes parameter count, activation memory, cache memory, and often the optimal learning rate. A fair ablation controls for tokens, compute, data order, tokenizer, optimizer, and evaluation prompts as much as possible.
@@ -180,6 +219,7 @@ Architecture claims should be tested under matched training and serving budgets.
 Open model reports are valuable primary sources, but they are not interchangeable with independent replication. They often combine architecture changes with data improvements, post-training changes, filtering, safety tuning, and benchmark-specific evaluation choices. When a report attributes gains to an architecture, ask whether the evidence isolates that factor. When a deployment chooses a LLaMA-class model, evaluate the actual checkpoint and decoding path rather than relying on the family name.
 
 \section{Architectural Accounting}
+\index{parameter count}\index{FLOP accounting}\index{active parameter}
 \label{sec:llama-architectural-accounting}
 
 For a dense decoder with $L$ layers, hidden width $d$, attention heads $H_q$, KV heads $H_{\mathrm{kv}}$, head dimension $d_h$, and SwiGLU width $m$, a rough per-layer parameter count is
@@ -198,9 +238,12 @@ where the first four terms correspond to $W_Q$, $W_K$, $W_V$, and $W_O$, and the
 \item[Activated parameters] Parameters used for a particular token or forward pass, especially in sparse MoE models.
 \item[Grouped-query attention] Attention in which multiple query heads share each key-value head.
 \item[KV-cache memory] Memory required to store past keys and values for autoregressive decoding.
+\item[Latent attention] An attention design that caches or computes through compressed latent states rather than ordinary full key/value tensors.
+\item[Load balancing] Router-side mechanisms that prevent a few MoE experts from receiving too many tokens while other experts remain underused.
 \item[RoPE] Rotary position embeddings, which rotate query and key dimensions by position-dependent angles.
 \item[RMSNorm] Normalization that rescales activations by their root mean square.
 \item[SwiGLU] A gated feed-forward layer using a SiLU gate and elementwise multiplication.
+\item[YaRN] A RoPE extension method that preserves high-frequency short-context behavior while interpolating lower-frequency dimensions for longer contexts.
 \end{description}
 
 \section{Exercises}
@@ -208,9 +251,11 @@ where the first four terms correspond to $W_Q$, $W_K$, $W_V$, and $W_O$, and the
 
 \begin{enumerate}
 \item Modify a GPT-style block on paper into a LLaMA-style block. List every changed component: normalization, bias terms, position handling, MLP activation, and attention cache assumptions.
-\item For $d=4096$, compare the approximate MLP parameter counts for a GELU MLP with hidden width $4d$ and a SwiGLU MLP with hidden width $\frac{8}{3}d$ rounded up to the nearest multiple of 256.
-\item Derive the relative-position property of RoPE by multiplying $R_m^{\top}R_n$ for a two-dimensional coordinate pair.
+\item For $d=4096$, compare the approximate MLP parameter counts for a GELU MLP with hidden width $4d$ and a SwiGLU MLP with hidden width $(8/3)d$ rounded up to the nearest multiple of 256.
+\item Derive the relative-position property of RoPE by multiplying the transpose of $R_m$ by $R_n$ for a two-dimensional coordinate pair.
+\item Compare position interpolation, NTK-aware RoPE scaling, and YaRN for a model extended from 32k to 128k context. Which parts of the report would show whether short-context behavior was preserved?
 \item Compute KV-cache memory for MHA, MQA, and GQA with $L=32$, $B=16$, $T=8192$, $H_q=32$, $H_{\mathrm{kv}}\in\{32,8,1\}$, $d_h=128$, and bfloat16 elements.
 \item Design an ablation plan to test whether GQA changes downstream quality independently of total parameter count and training tokens.
 \item For an MoE layer with 64 experts, top-2 routing, and capacity limits, name three metrics besides benchmark accuracy that should be reported to make the architecture claim credible.
+\item Read a DeepSeek-V3-style architecture report and separate architecture claims from systems claims. Which statements depend on MLA, MoE routing, FP8 training, custom kernels, or expert-parallel communication?
 \end{enumerate}

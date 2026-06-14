@@ -1,9 +1,12 @@
 \chapter{Domain and Language Adaptation}
 \label{ch:domain-language-adaptation}
 
-\abstract{This chapter studies how LLMs are adapted to Chinese, domain-specific corpora, NL2SQL, medical-style retrieval tasks, and other specialized settings. It compares continual pretraining, supervised fine-tuning, retrieval, tokenizer extension, and evaluation under domain shift.}
+\abstract{This chapter studies how LLMs are adapted to Chinese, domain-specific corpora, NL2SQL, medical-style retrieval tasks, and other specialized settings. It compares continual pretraining, supervised fine-tuning, retrieval, tokenizer extension, adapter-based updates, evaluation under domain shift, and governance boundaries for private or high-stakes knowledge.}
+
+\paragraph{Chapter contract.} The reader should leave this chapter able to diagnose whether a domain or language gap is caused by data, vocabulary, retrieval, task format, or evaluation shift, and then choose a lower-risk adaptation path before changing model weights.
 
 \section{Adaptation Is a Diagnosis}
+\index{domain adaptation}\index{language adaptation}\index{error analysis}
 \label{sec:domain-adaptation-diagnosis}
 
 Domain adaptation is not one method. It is a diagnosis of what the base model lacks. A model may fail in a new setting because the tokenizer fragments the language badly, because the relevant facts were absent or stale during pretraining, because the domain uses unfamiliar style and discourse conventions, because the task requires a structured output grammar, or because the answer must be grounded in private documents that should never be memorized into model weights. Each diagnosis points to a different intervention.
@@ -11,24 +14,26 @@ Domain adaptation is not one method. It is a diagnosis of what the base model la
 Table~\ref{tab:adaptation-diagnosis} gives a practical decision map. Continual pretraining, SFT, LoRA, tokenizer extension, and retrieval are complementary tools, not substitutes with the same risk profile. The cheapest intervention that addresses the actual failure should be tried before a more invasive one.
 
 \begin{table}[t]
-\caption{Diagnosing adaptation needs.}
+\caption{Decision map for diagnosing domain adaptation needs.}
 \label{tab:adaptation-diagnosis}
 \small
 \begin{tabular}{@{}p{3.1cm}p{4.2cm}p{4.5cm}@{}}
-\hline\noalign{\smallskip}
+\toprule
 Observed Failure & Likely Cause & Candidate Intervention \\
-\noalign{\smallskip}\svhline\noalign{\smallskip}
+\midrule
 Many tokens per word or character & Tokenizer mismatch & Vocabulary extension or a language-specialized tokenizer \\
 Knows style but not facts & Missing or changing knowledge & Retrieval first; continual pretraining only for stable public corpora \\
 Correct facts, wrong format & Interface or output contract missing & SFT or PEFT on demonstrations with validators \\
 Fails on schemas or APIs & Poor grounding in structured context & Schema-aware prompting, SFT, execution feedback, or tool use \\
 Good benchmark, bad deployment & Distribution shift or contamination & Private held-out evaluation and slice analysis \\
 Unsafe advice in high-stakes domain & Policy and evidence boundaries unclear & Domain safety data, abstention rules, expert review, and monitoring \\
-\noalign{\smallskip}\hline
+\bottomrule
 \end{tabular}
 \end{table}
 
 The most common error is to call every failure a fine-tuning problem. If the user asks about a private handbook updated last week, fine-tuning is the wrong default: retrieval gives freshness and access control. If the model cannot produce valid SQL for a known schema, supervised examples and execution validators may be appropriate. If the model uses too many tokens for a target language, tokenizer and continued pretraining choices matter before instruction style. If the application is medical, legal, or financial, the adaptation plan must include evidence boundaries and expert evaluation, not only a higher score.
+
+Figure~\ref{fig:domain-adaptation-loop} turns that rule into a diagnosis loop that can be repeated as new failure slices appear.
 
 \begin{figure}[t]
 \centering
@@ -47,17 +52,19 @@ The most common error is to call every failure a fine-tuning problem. If the use
 \draw[llmdash] (rule.north east) -- (evidence.south);
 \end{tikzpicture}
 }
+\Description{Diagnosis-loop diagram moving from observed failure slices to diagnosis, intervention, evidence, and new failure slices, with a rule emphasizing quality, freshness, privacy, rollback, and regression tests.}
 \caption{Domain adaptation is a diagnosis loop. The same symptom can call for retrieval, supervised adaptation, continued pretraining, tokenizer work, or a governance change.}
 \label{fig:domain-adaptation-loop}
 \end{figure}
 
 \section{Language Adaptation}
+\index{multilingual model}\index{tokenizer coverage}\index{tokenization!coverage}\index{continued pretraining}
 \label{sec:language-adaptation}
 
 Language adaptation starts with tokenization. A subword tokenizer trained mostly on English may split Chinese, Thai, Arabic, or domain-specific symbols into long sequences. This increases context cost and makes long-range modeling harder. A simple diagnostic is token fertility:
 \begin{equation}
-  F_L = \frac{1}{|\mathcal{S}_L|}
-  \sum_{s\in \mathcal{S}_L}
+  F_L =
+  \operatorname{avg}_{s\in \mathcal{S}_L}
   \frac{\mathrm{tokens}(s)}{\mathrm{units}(s)},
   \label{eq:token-fertility}
 \end{equation}
@@ -65,11 +72,18 @@ where $\mathrm{units}(s)$ may be characters, words, or language-appropriate segm
 
 There are three broad tokenizer strategies. The first is to keep the original tokenizer and adapt only weights. This is simple and preserves checkpoint compatibility, but it may waste context. The second is to extend the vocabulary with frequent target-language or domain tokens. New embeddings can be initialized from the average or composition of their old subpieces, then trained during continued pretraining. The third is to train a new tokenizer and convert or retrain the model. This can improve efficiency but is the most disruptive because embeddings, output heads, and compatibility with existing checkpoints change.
 
+Vocabulary extension has an implementation contract. The tokenizer should be trained on representative target-language text, commonly with a subword method such as SentencePiece \cite{kudo2018sentencepiece}; the new vocabulary should preserve old token ids when checkpoint compatibility matters; and the embedding matrix and language-model head must be resized from $V\times H$ to $V'\times H$. If input and output embeddings are tied, both sides of the tie must remain consistent. The newly appended rows should be trained with continued pretraining before instruction tuning, preferably with replay data so the model does not forget the original language distribution. Chinese LLaMA and Alpaca followed this pattern by adding 20,000 Chinese tokens to LLaMA, producing a 49,953-token merged vocabulary and substantially reducing Chinese sequence length before Chinese continued pretraining and instruction tuning \cite{cui2023efficient}.
+
+The Chinese LLaMA recipe also shows what a vocabulary-extension run card should contain. The new Chinese tokenizer was merged by vocabulary union, so old LLaMA token ids remained stable and new rows were appended to the embedding and LM-head matrices. The 7B basic run used a staged adaptation in which the newly added embeddings were trained before broader LoRA-based updates; later runs used LoRA over attention and MLP paths while keeping embeddings and the LM head trainable. Instruction-tuned Chinese Alpaca adds a padding token, so its serving stack must know that the tokenizer vocabulary differs from the base Chinese LLaMA tokenizer. These details matter for adapter reuse, checkpoint merging, perplexity comparison, and any regression test that mixes old English prompts with new Chinese prompts.
+
 Chinese adaptation illustrates the tradeoff. Chinese LLaMA and Alpaca-style work added Chinese text encoding, secondary pretraining, and Chinese instruction tuning to make LLaMA-family models more useful for Chinese users \cite{cui2023efficient}. The lesson is not that every language needs a separate model. The lesson is that language coverage is a full pipeline: tokenizer fertility, corpus selection, continued pretraining, instruction data, safety examples, and evaluation all matter.
+
+Baichuan 2 shows the train-from-scratch version of the same lesson. Instead of extending an English-heavy checkpoint, it trains multilingual 7B and 13B models on a 2.6-trillion-token mixture and designs the tokenizer for Chinese, English, code, academic text, and numeric data from the beginning \cite{yang2023baichuan2}. This can produce stronger language and domain coverage, but it is much more expensive than adaptation. A release claim should therefore distinguish tokenizer extension, continued pretraining, and full multilingual pretraining: they solve related problems at very different cost, compatibility, and governance levels.
 
 Multilingual evaluation must be slice-based. A single averaged score can hide a model that improves simplified Chinese but degrades English, improves news text but fails colloquial dialogue, or answers in the wrong language. Evaluation should include target-language perplexity, instruction following, translation or cross-lingual transfer where relevant, code-switching, culturally specific references, and safety examples written by native speakers.
 
 \section{Continual Pretraining}
+\index{continual pretraining}\index{replay data}\index{catastrophic forgetting}
 \label{sec:continual-pretraining}
 
 Continual pretraining, also called domain-adaptive pretraining when the corpus is domain-specific, continues the language-model objective on new unlabeled text. It is useful when the domain has stable terminology, discourse patterns, and public factual regularities. ``Do not stop pretraining'' showed that continuing pretraining on domain and task-related text can improve downstream performance for domain tasks \cite{gururangan2020dont}. The same idea scales to modern decoder models, but the risks scale too.
@@ -89,18 +103,24 @@ Continual pretraining should not be used to inject private or rapidly changing f
 
 Biomedical models illustrate both value and caution. BioGPT used large-scale biomedical literature to train a generative model specialized for biomedical text generation and mining \cite{luo2022biogpt}. Such specialization can improve terminology and task performance, but it does not by itself make the model clinically safe. Biomedical language competence is different from validated medical decision support.
 
+Medical fine-tuning demos make the same point in pipeline form. One stage may use encyclopedia and textbook text for continued pretraining, another may use doctor-patient dialogues for SFT, and a reward-model stage may compare a human doctor answer against a model-generated answer. These are not interchangeable data sources. The report should state which source feeds each stage, whether examples were split by document, patient case, time, or only by random row, and whether adjacent chunks from the same textbook or dialogue can appear on both sides of the split. A random 5 percent validation split is useful for debugging loss, but it is weak evidence for deployment generalization in medicine.
+
 \section{Supervised Domain Tuning}
+\index{domain tuning}\index{task data}\index{label quality}
 \label{sec:supervised-domain-tuning}
 
 SFT or PEFT is appropriate when the missing capability is a task interface rather than broad language modeling. A customer-support assistant may need to follow a ticket triage format. A writing assistant for a fictional world may need to continue in a specific voice. An enterprise assistant may need to output a strict JSON object. A database assistant may need to map natural-language questions to SQL. These are supervised behaviors.
 
 The training examples should separate three things: domain context, user request, and expected response. A useful schema for a writing task might contain a short memory summary, recent text, and the next passage. A useful schema for QA might contain question, evidence, and answer. A useful schema for NL2SQL contains the natural-language question, the database schema, optional foreign-key information, and the target SQL. Collapsing all fields into a raw string may work for a demo, but it hides the contract from preprocessing, validation, and evaluation.
 
+Field semantics deserve their own audit. Preference datasets often contain names such as \texttt{response\_chosen} and \texttt{response\_rejected}; SFT datasets often contain only a target answer. Accidentally using the rejected response as the SFT demonstration trains the model toward behavior that the later reward model is supposed to penalize. A domain tuning run should therefore include a small rendered-sample check for every stage: pretraining text, SFT prompt-answer string, reward-model chosen/rejected pair, and PPO query template.
+
 PEFT is often the first adaptation method for supervised domain tuning because it is cheap to reverse and compare. LoRA can adapt a base model to a schema format or domain style while storing only adapter weights \cite{hu2021lora}. QLoRA can make the same experiment feasible under tighter hardware limits \cite{dettmers2023qlora}. The danger is false confidence: a small adapter can overfit a small domain set and appear fluent while failing on unseen entities, new schemas, or adversarial wording.
 
 Data splits must represent deployment. Randomly splitting examples in a domain dataset can leak entities, templates, or schemas. For an internal support assistant, split by customer or time. For a code assistant, split by repository. For fiction continuation, split by work or chapter. For NL2SQL, split by database when the deployment will see new schemas. The evaluation split should test the generalization claim the model is supposed to satisfy.
 
 \section{Structured Tasks: NL2SQL}
+\index{NL2SQL}\index{schema linking}\index{execution accuracy}
 \label{sec:nl2sql}
 
 Natural-language-to-SQL tasks expose the difference between fluent text and executable meaning. Given a question $q$ and schema $S$, the model emits a SQL query $y$:
@@ -117,6 +137,7 @@ Evaluation should include exact string match only as a diagnostic. SQL has many 
 For production, an NL2SQL model is usually part of a guarded system. The system can restrict SQL to read-only statements, require a query planner or parser check, ask for clarification when the question underspecifies a join, and show the generated query before execution. Fine-tuning the model is only one layer of safety.
 
 \section{Retrieval Versus Weight Updates}
+\index{retrieval-augmented generation}\index{weight update}\index{freshness}
 \label{sec:retrieval-versus-updates}
 
 Retrieval-augmented generation and fine-tuning solve different problems. Retrieval supplies evidence at inference time; fine-tuning changes behavior stored in parameters. If the knowledge is fresh, private, user-specific, or legally sensitive, retrieval is usually the safer first step. If the behavior is a stable output pattern or the domain language is broadly missing, fine-tuning may be appropriate. If both are missing, combine them: retrieve evidence and fine-tune the model to use evidence faithfully.
@@ -126,6 +147,7 @@ A medical-style QA system is a useful example. The knowledge base can store prio
 Fine-tuning on retrieved answers can improve style and evidence use, but it should not train the model to invent citations. The target answer should be traceable to evidence, and examples without adequate evidence should teach abstention or clarification. In high-stakes settings, a fluent answer without evidence is a failure even if it sounds domain-specific.
 
 \section{Safety and Governance in Domains}
+\index{privacy}\index{data residency}\index{audit log}\index{domain safety}
 \label{sec:domain-safety-governance}
 
 Domain adaptation often moves a model closer to consequential decisions. Medical, legal, financial, educational, and enterprise systems require stricter governance than general chat. The first question is scope: what is the model allowed to do, and what must remain with a qualified human or an external system? The second question is evidence: what sources can the model rely on, and how are they updated? The third question is accountability: what logs, audits, and rollback paths exist when the system fails?
@@ -135,6 +157,7 @@ Safety data should be domain-specific. A medical assistant needs examples that d
 Privacy is also central. A domain corpus may contain personal data, trade secrets, unreleased product plans, or copyrighted material. Deduplication and de-identification reduce risk but do not eliminate it. If private facts need to be revocable, retrieval with access controls is preferable to weight updates. If adaptation uses private examples, membership-inference and memorization checks should be part of release evaluation.
 
 \section{Evaluation Under Domain Shift}
+\index{domain shift}\index{temporal validation}\index{subgroup evaluation}
 \label{sec:domain-shift-evaluation}
 
 Domain adaptation should be evaluated by slices, not only by averages. A good report includes in-domain and out-of-domain metrics, pre-adaptation and post-adaptation comparisons, and failure analysis by entity type, language, length, source, and date. For language adaptation, report token fertility and target-language task quality. For structured tasks, report validity and execution. For retrieval-grounded tasks, report retrieval recall separately from answer quality. For high-stakes tasks, include expert review and abstention quality.
@@ -142,6 +165,8 @@ Domain adaptation should be evaluated by slices, not only by averages. A good re
 Contamination is a special concern. Domain benchmarks are often small and public. A model can memorize task templates or examples during continued pretraining or synthetic-data generation, especially when the same benchmark is used repeatedly to tune prompts and adapters. Evaluation sets should be held out before adaptation begins, and their overlap with training data should be checked by exact match, near-duplicate search, and task-specific leakage tests \cite{xu2024benchmark}.
 
 The final question is operational: does adaptation improve the deployed workflow? A model that raises an NL2SQL benchmark by two points but produces unsafe queries is worse. A model that sounds more medical but cites no evidence is worse. A model that improves Chinese chat but doubles context cost because of tokenization may be uneconomical. Adaptation is successful only when model quality, systems cost, safety, and governance improve together.
+
+Stage-by-stage smoke tests are part of this evaluation. If a continued-pretraining checkpoint answers a simple medical prompt with multilingual gibberish, repeated fragments, or broken special tokens, the next SFT or RLHF stage may hide the failure rather than fix it. Such outputs usually point to tokenizer mismatch, too little or too narrow training, an adapter/base merge problem, or an unstable generation configuration. The correct response is to debug the stage boundary before interpreting later reward or chat examples.
 
 This can be written as a release criterion rather than a slogan. Let $\Delta Q$ be the measured task-quality gain, $\Delta C$ the added cost, $\Delta R$ the added risk estimate, and $\Delta G$ the governance burden created by data, licensing, monitoring, or rollback. A domain release should be justified only when
 \[
@@ -165,6 +190,7 @@ under weights chosen before the experiment. The equation is deliberately simple:
 \item[Continual pretraining] Continuing the language-model objective from a pretrained checkpoint on additional corpora.
 \item[Domain-adaptive pretraining] Continual pretraining focused on a target domain such as biomedical papers, legal documents, or code.
 \item[Token fertility] The number of tokenizer tokens needed per language or domain unit, used as a diagnostic for tokenizer coverage.
+\item[Vocabulary extension] Adding target-language or domain tokens while resizing embeddings and output heads so a pretrained checkpoint can encode the new units.
 \item[Schema linking] The process of connecting words in a natural-language query to database tables, columns, and values.
 \item[Execution accuracy] The fraction of generated programs or SQL queries that return the expected result when executed in a controlled environment.
 \item[Replay data] General-distribution data mixed into continual pretraining to reduce forgetting.
@@ -175,6 +201,7 @@ under weights chosen before the experiment. The equation is deliberately simple:
 
 \begin{enumerate}
 \item Compute token fertility for 100 English sentences and 100 target-language sentences under the same tokenizer. Interpret the result as a cost and modeling diagnostic.
+\item Design a vocabulary-extension experiment for Chinese or another target language. Specify tokenizer training data, new-token initialization, replay data, and compatibility tests for old prompts and adapters.
 \item Design a continual-pretraining mixture for a legal-domain model. Specify domain sources, replay sources, deduplication rules, and three regression tests.
 \item Build an NL2SQL evaluation plan for a new database. Include schema split, prompt serialization, parse validity, execution accuracy, and sandboxing rules.
 \item Compare retrieval-only, LoRA-only, and retrieval-plus-LoRA baselines on a small domain QA set. Report retrieval recall separately from answer correctness.

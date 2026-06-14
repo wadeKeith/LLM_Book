@@ -1,18 +1,26 @@
 \chapter{Parameter-Efficient Adaptation}
 \label{ch:parameter-efficient-adaptation}
 
-\abstract{This chapter covers adapters, prefix tuning, prompt tuning, LoRA, QLoRA, target-module selection, rank choice, quantization, domain adaptation tradeoffs, and evaluation of adapted models.}
+\abstract{This chapter studies parameter-efficient adaptation as a tradeoff between expressivity, memory, storage, and operational control. It covers adapters, prefix tuning, prompt tuning, LoRA, QLoRA, target-module selection, rank choice, quantization, adapter composition, domain adaptation tradeoffs, and evaluation of adapted models against base-model regressions.}
+
+\paragraph{Chapter contract.} The reader should leave this chapter able to choose an adaptation method for a constrained deployment, justify rank and target-module choices, distinguish memory savings from latency or governance savings, and design evaluations that reveal when a small adapter has changed high-risk behavior.
 
 \section{What Is Being Made Efficient?}
+\index{parameter-efficient adaptation}\index{parameter-efficient adaptation!full fine-tuning}\index{full fine-tuning}\index{adapter}\index{parameter-efficient adaptation!adapter}
 \label{sec:peft-efficiency-target}
 
 Full fine-tuning updates every parameter of a pretrained model. This is expressive, but it is expensive in three different ways. Training must store gradients and optimizer states for the full model; deployment may need a separate full checkpoint per task; and the adapted model may drift away from general capabilities learned during pretraining. Parameter-efficient fine-tuning, or PEFT, restricts the trainable variables while leaving most pretrained weights frozen.
 
 Let $\theta_0$ be the frozen base model and $\phi$ be the trainable adaptation parameters. PEFT solves
 \begin{equation}
-  \min_{\phi} \; -\sum_{(x,y)\in \mathcal{D}}
-  \log p_{\theta_0,\phi}(y \mid x),
-  \qquad |\phi| \ll |\theta_0|.
+  \begin{aligned}
+  \mathrm{NLL}_{\mathcal{D}}(\theta_0,\phi)
+    &= -\mathrm{avg}_{(x,y)\in \mathcal{D}}
+       \log p_{\theta_0,\phi}(y \mid x),\\
+  \phi^{\star}
+    &= \arg\min_{\phi}\mathrm{NLL}_{\mathcal{D}}(\theta_0,\phi),
+       \qquad |\phi| \ll |\theta_0|.
+  \end{aligned}
   \label{eq:peft-objective}
 \end{equation}
 The inequality is the source of the savings, but it is also the source of the limitation. A PEFT method can only express changes reachable through the adapter subspace, prompt vectors, scaling vectors, or low-rank matrices it introduces. A small adapter may be enough to teach a format or a narrow domain. It may be insufficient to repair a weak tokenizer, add broad factual knowledge, or reverse a harmful pretraining bias.
@@ -20,6 +28,7 @@ The inequality is the source of the savings, but it is also the source of the li
 Efficiency therefore has to be specified. Training memory depends on which parameters require gradients and optimizer states. Checkpoint storage depends on whether the base model is shared and only adapters are saved. Serving latency depends on whether the adapter adds extra computation, extra sequence length, or unmerged matrix products. Operational complexity depends on how many adapters must be versioned, loaded, combined, audited, and rolled back.
 
 \section{Adapter and Prompt Families}
+\index{prefix tuning}\index{prompt tuning}\index{adapter!module}\index{adapter module}\index{soft prompt}\index{prompt tuning!soft prompt}
 \label{sec:adapter-prompt-families}
 
 The original adapter idea inserts small trainable modules inside each \transformer block while freezing the pretrained weights \cite{houlsby2019parameter}. A common bottleneck adapter maps a hidden vector $h\in\mathbb{R}^{d}$ down to a smaller dimension $b$, applies a nonlinearity, maps back to $d$, and adds the result residually:
@@ -35,27 +44,34 @@ When $b\ll d$, the adapter contributes far fewer parameters than the surrounding
 
 Prefix tuning moves the trainable parameters from the residual stream into attention inputs. It learns continuous prefix vectors that act like task-specific key and value states available to the model at each layer \cite{li2021prefixtuning}. The base model stays frozen, and generated tokens can attend to the learned prefix as if it were additional context. Prompt tuning is even simpler: it learns a small sequence of continuous input embeddings while leaving the model unchanged \cite{lester2021power}. Prompt tuning is cheap to store and easy to swap, but it consumes effective context length and may be less expressive at smaller model scales.
 
+LLaMA-Adapter is a useful hybrid between prompt methods and adapter methods. It keeps the LLaMA weights frozen, injects learnable adaptation prompts into higher transformer layers, and uses zero-initialized attention gates so undertrained prompts have little effect at the beginning of fine-tuning \cite{zhang2023llamaadapter}. This design turns stability into an explicit mechanism: the model starts close to the frozen base and gradually admits instruction cues as the gates learn. A report for such methods should state which layers receive prompts, prompt length, gate initialization, trainable parameter count, and whether visual or other non-text tokens are added to the prompt path.
+
+Adapter names are not enough to define the trainable state. LLaMA-Adapter v2-style implementations may also make RMSNorm parameters and per-linear scale or bias vectors trainable, in addition to prompt embeddings and gates. A checkpoint described as ``adapter-only'' should therefore list the saved parameter substrings or module classes, not just the method family name.
+
 Other PEFT methods use multiplicative gates or sparse updates. IA$^3$, for example, learns vectors that rescale internal activations and can be highly parameter-efficient in few-shot settings \cite{liu2022fewshot}. The common principle is that the base model supplies a rich representation space and the adapter supplies a low-dimensional control signal.
 
+Table~\ref{tab:peft-families} compares the main PEFT families by trainable object and deployment cost.
+
 \begin{table}[t]
-\caption{Families of parameter-efficient adaptation.}
+\caption{Main families of parameter-efficient adaptation methods.}
 \label{tab:peft-families}
 \small
 \begin{tabular}{@{}p{2.4cm}p{3.7cm}p{4.9cm}@{}}
-\hline\noalign{\smallskip}
+\toprule
 Method & Trainable Object & Main Deployment Cost \\
-\noalign{\smallskip}\svhline\noalign{\smallskip}
+\midrule
 Adapters & Bottleneck modules inside blocks & Extra projections and adapter routing \\
 Prefix tuning & Per-layer continuous key/value prefixes & More attention states and prefix management \\
 Prompt tuning & Input-level soft prompt embeddings & Consumes context budget; task-specific prompt loading \\
 IA$^3$-style scaling & Learned activation scaling vectors & Small extra elementwise operations \\
 LoRA & Low-rank additive updates to selected matrices & Extra low-rank matmuls unless merged \\
 QLoRA & LoRA on a quantized frozen base & Quantization kernels and possible merge constraints \\
-\noalign{\smallskip}\hline
+\bottomrule
 \end{tabular}
 \end{table}
 
 \section{LoRA}
+\index{LoRA}\index{LoRA!rank}\index{LoRA!target module}\index{low-rank adaptation}\index{rank}\index{target module}
 \label{sec:lora-mechanics}
 
 Low-Rank Adaptation, or LoRA, is the most widely used PEFT method for decoder \llms because it fits the linear algebra of \transformer blocks \cite{hu2021lora}. For a frozen weight matrix $W_0\in\mathbb{R}^{d_{\mathrm{out}}\times d_{\mathrm{in}}}$, LoRA learns a low-rank update
@@ -74,6 +90,12 @@ instead of $d_{\mathrm{in}}d_{\mathrm{out}}$. For square matrices with width $d$
 
 The initialization is part of the method. A typical implementation initializes one low-rank factor randomly and the other to zero so that $\Delta W=0$ at the start of training. The initial model is exactly the base model, and adaptation begins as a learned residual update. LoRA dropout can be applied on the adapter path, and the base weight remains frozen.
 
+Modern PEFT libraries make this contract more detailed than the phrase rank plus target modules. A reproducible \texttt{LoraConfig} should record initialization, scaling rule, saved non-adapter modules, layer/rank/alpha patterns, token-specific training, and whether the adapter targets modules or raw parameters~\cite{huggingface2026peftlora}. Data-driven or decomposition-based initializers such as EVA, PiSSA, CorDA, OLoRA, and LoftQ change the starting point, while rsLoRA changes the scaling from $\alpha/r$ to $\alpha/\sqrt{r}$. The DoRA variant adds a learned magnitude path on top of the LoRA direction and can improve low-rank quality, but it also changes inference overhead and merge policy. Activated LoRA applies the adapter only after an invocation token sequence, which can reuse the base-model KV cache before that boundary but cannot be merged like an ordinary adapter. These options are useful, but they also expand the run card: one must state the invocation tokens, initialization dataset, mergeability, runtime-only configuration, and whether MoE expert tensors are reached through \texttt{target\_parameters}.
+
+The common SVD explanation is useful but limited. If a full fine-tuning update or a gradient snapshot has rapidly decaying singular values, then a low-rank adapter can capture many of the dominant update directions with far fewer parameters. That observation does not prove that every useful adaptation is low-rank, nor that the LoRA update learned under frozen weights matches the top singular vectors of a hypothetical full update. It is a modeling hypothesis that should be tested by varying rank, target modules, and data scale, then comparing task gains and regression losses.
+
+Figure~\ref{fig:lora-low-rank-path} shows how the frozen path and low-rank residual path combine at inference time.
+
 \begin{figure}[t]
 \centering
 \begin{tikzpicture}[node distance=1.0cm and 1.1cm]
@@ -88,15 +110,23 @@ The initialization is part of the method. A typical implementation initializes o
 \draw[llmarrow] (lora.east) -- ++(0.35cm,0) |- (sum.south);
 \draw[llmdash] (lora.south east) -- (ops.south west);
 \end{tikzpicture}
+\Description{Diagram showing a hidden state split into a frozen base linear path and a low-rank LoRA residual path, then recombined into an adapted output with notes about merged and unmerged serving.}
 \caption{LoRA adds a trainable low-rank residual to selected frozen matrices. The same learned update has different operational consequences depending on whether it is kept as an adapter or merged into the base weight.}
 \label{fig:lora-low-rank-path}
 \end{figure}
 
 LoRA can target different matrices. Attention projections are common: query, key, value, and output projections each control different aspects of attention behavior. Many instruction-tuning recipes target query and value projections only for lower cost; stronger adaptation often also targets key, output, and feed-forward projections. There is no universal best target set. Code tasks, multilingual adaptation, and structured generation may benefit from broader targets; a small style adapter may not.
 
+Implementation layout can change what a target module means. In lightweight LLaMA code, query, key, and value may be stored as one fused \texttt{c\_attn} projection. A Q/V-only LoRA adapter over that fused matrix must train low-rank factors only for the enabled slices, zero-pad the disabled key slice when forming $\Delta W$, and apply the same mask during merge and unmerge. The run card should record the fused or split QKV layout, enabled slices, scaling, dropout, bias policy, and merge state; otherwise an adapter checkpoint can silently attach to the wrong columns even when tensor shapes load.
+
+Embedding tables and the language-model head are also linear maps, so they can be adapted, but they deserve extra caution. Updating embeddings may help when new special tokens, domain vocabulary, or multilingual token usage must be learned. Updating the output head can change lexical probabilities directly. If input embeddings and the output head are tied, adapting one side can implicitly affect the other. A PEFT report should therefore state whether embeddings or the LM head were targeted, whether weights were tied, and whether the adapter was mergeable without changing tokenizer compatibility.
+
+Chinese LLaMA-style adaptation is a useful counterexample to the idea that LoRA always means ``freeze everything except two attention matrices.'' In that setting, LoRA handled broad attention and MLP updates, while the newly resized embeddings and LM head remained trainable so the added Chinese vocabulary could become useful \cite{cui2023efficient}. The design separates three questions: which base weights are frozen, which low-rank paths are trainable, and which vocabulary-dependent dense matrices must still move. A report should answer all three, especially when a later instruction adapter is expected to sit on top of the language-adapted base.
+
 Merging is a practical advantage. At inference time one can compute $W_{\mathrm{merged}}=W_0+(\alpha/r)BA$ and serve the model as an ordinary dense model, provided the precision and deployment policy allow the merge. This removes adapter matmul overhead. Keeping adapters unmerged allows dynamic swapping, multi-tenant serving, and combining adapters, but it requires runtime adapter management. Multiple adapters can be added as sums of low-rank updates only when their target matrices, scaling, and licensing constraints are compatible; empirical interference still has to be tested.
 
 \section{QLoRA and Quantized Training}
+\index{QLoRA}\index{QLoRA!NF4}\index{QLoRA!double quantization}\index{quantization}\index{NF4}\index{double quantization}
 \label{sec:qlora-quantized-training}
 
 LoRA reduces trainable parameters but does not by itself remove the memory needed to store the frozen base model. QLoRA attacks that cost by keeping the base model in a 4-bit quantized representation while backpropagating through it into LoRA adapters \cite{dettmers2023qlora}. The base weights are not updated; gradients update only the low-rank matrices. Activations, adapter weights, and some computation may still use higher precision, but the dominant model-weight storage is much smaller.
@@ -116,7 +146,16 @@ The last term can still be large, especially with long sequences and large batch
 
 Quantization is not free. A 4-bit base model introduces quantization error, kernel constraints, and sometimes slower wall-clock training if hardware kernels are inefficient. QLoRA uses NormalFloat 4-bit quantization, double quantization, and paged optimizers to make the recipe practical, but those techniques do not guarantee that every model and task will match full fine-tuning. Evaluation must compare task quality, regression behavior, and calibration, not just whether the run fits on one GPU.
 
+These three pieces should be reported separately. NF4 is a storage format chosen for approximately normal pretrained weights; it does not mean all computation happens in four bits. A typical QLoRA path stores frozen blocks in NF4, dequantizes to a higher computation dtype for matrix multiplies, and sends gradients through the dequantized path into LoRA matrices. Double quantization reduces scale and zero-point overhead by quantizing the per-block quantization constants; its benefit depends on block size and scale storage. Paged optimizers target peak-memory spikes rather than average memory by letting optimizer states move through unified memory when long sequences or checkpointing make activations peak. A reproducible QLoRA report should state storage dtype, compute dtype, block size, double-quant setting, target modules, whether adapters cover all linear layers or only attention projections, gradient checkpointing, paged optimizer, maximum sequence length, and peak memory.
+
+NF4 should also not be treated as a universal theorem about four-bit codes. In absmax blockwise quantization, the distribution after dividing by the block maximum depends on the block size, so a fixed set of codepoints cannot be optimal for every block size \cite{yoshida2023nf4}. This does not invalidate QLoRA's empirical recipe, but it makes the quantization report more important: an implementation should name the exact quantization type, block or group size, scale storage, and dequantization path. In common BitsAndBytes-style QLoRA setups, the concrete knobs include \texttt{load\_in\_4bit}, \texttt{bnb\_4bit\_quant\_type}, \texttt{bnb\_4bit\_compute\_dtype}, \texttt{bnb\_4bit\_use\_double\_quant}, and whether a paged optimizer such as \texttt{paged\_adamw\_32bit} is used.
+
+Low-bit loading is also a placement contract. A script that sets \texttt{load\_in\_8bit=True}, \texttt{device\_map=auto}, and a per-GPU \texttt{max\_memory} cap is not only changing arithmetic precision; it is deciding where layers live, how much headroom is reserved, and whether CPU offload or uneven device placement can affect latency. Likewise, QLoRA training scripts often combine \texttt{bits=4}, NF4, double quantization, BF16 compute, gradient checkpointing, grouped-by-length batching, and a paged optimizer. Reporting only ``4-bit LoRA'' loses the actual systems recipe.
+
+The current PEFT quantization guide makes LoftQ and target selection concrete~\cite{huggingface2026peftquantization}. Before training, the quantized model should be prepared for k-bit training, and the report should preserve the exact \texttt{BitsAndBytesConfig}: \texttt{load\_in\_4bit}, \texttt{bnb\_4bit\_quant\_type}, double quantization, and compute dtype. For LoftQ to affect the quantization error broadly, LoRA generally needs to target as many linear layers as possible, often with an all-linear target-module setting rather than only query and value projections. The convenient \texttt{replace\_lora\_weights\_loftq} path updates only the LoRA weights in one step, keeps the original quantized base weights, requires safetensors, and currently targets bitsandbytes 4-bit models. That tradeoff is attractive for compatibility, but it is not the same experiment as jointly iterating LoRA and quantized base weights.
+
 \section{Choosing Rank, Targets, and Hyperparameters}
+\index{hyperparameter tuning}\index{fused QKV}\index{target module}
 \label{sec:rank-target-hyperparameters}
 
 Rank $r$ controls capacity. A rank that is too small underfits; a rank that is too large consumes more memory and may overfit a small dataset. The scaling parameter $\alpha$ controls the magnitude of the update relative to the base matrix. Practitioners often hold $\alpha/r$ or $\alpha$ in a conventional range, but the stable choice depends on optimizer, target modules, dataset size, and whether the base is quantized.
@@ -127,23 +166,35 @@ Learning rates for adapters are often higher than full fine-tuning rates because
 
 The data collator remains critical. PEFT does not fix incorrect label masks, broken padding, or chat-template mismatches. A LoRA training implementation that freezes the base model, enables gradient checkpointing, disables the inference cache during training, pads to the longest sequence in the batch, and saves only trainable adapter weights captures the right systems shape. The textbook lesson is broader than the implementation: adapter training still inherits every preprocessing and evaluation obligation from SFT.
 
+Concrete QLoRA SFT scripts make this contract visible. Source and target lengths are often truncated separately, for example with distinct source and response token budgets; a \texttt{train\_on\_source} flag decides whether prompt tokens receive labels or are filled with an ignore index. Grouping examples by length changes memory use and sometimes throughput, so it belongs in the run card. Adapter-only checkpoints are another trap: if resumption reloads adapter weights but not optimizer and scheduler state, the resumed curve is not the same experiment. A report should say whether optimizer state, scheduler state, random state, tokenizer changes, and adapter weights all survive save-and-resume.
+
 \section{Systems Costs and Deployment}
+\index{adapter serving}\index{adapter!serving}\index{adapter merging}\index{adapter!merging}\index{multi-tenant serving}
 \label{sec:peft-systems-deployment}
 
 PEFT changes the deployment architecture. With full fine-tuning, each adapted model is a complete checkpoint. With LoRA or adapters, many tasks may share one base checkpoint plus small task-specific files. This is attractive for storage and governance: a base model can be approved once, while adapters are reviewed and versioned separately. It also creates runtime challenges.
 
 If adapters are loaded dynamically, the server must batch requests that use different adapter ids. A batch containing many adapters may lose some efficiency because each request needs a different low-rank path or merged weight set. If adapters are premerged, the server regains dense inference speed but loses cheap swapping and may need many resident model copies. If the base model is quantized, merging can require dequantization or a specialized quantized-merge path.
 
+Adapters also appear inside training systems. In a memory-constrained RLHF loop, one frozen base can support a trainable policy adapter, a frozen reward-model adapter, and a reference path for KL scoring. The benefit is that the system avoids loading several full model copies. The risk is role confusion: reward scoring, KL computation, and policy updates are all ordinary forward passes unless the runtime records which adapter is active. Adapter id, score head, train/eval mode, frozen parameters, and merge state therefore belong in the checkpoint and training log.
+
 Adapter composition is another operational risk. Two adapters trained separately may both improve their own tasks but degrade each other when summed or applied sequentially. A domain adapter that changes style can interfere with a safety adapter that depends on precise refusal wording. A multilingual adapter can improve target-language fluency while degrading English regression tests. Composition should be treated as a new model release, not as a bookkeeping operation.
+
+LoRA merging has the same release risk. Platypus-style model building fine-tuned LoRA modules on a curated STEM/logical-reasoning mixture and then evaluated merges with other fine-tuned models, while explicitly checking training data for benchmark leakage \cite{lee2023platypus}. The practical rule is that a merged model inherits both adapters' data and evaluation obligations. Similar leaderboard scores do not imply that two adapters will compose well; the merge must be tested by domain slice, safety slice, contamination audit, and regression benchmark.
 
 Finally, PEFT does not remove the need for data security. An adapter can memorize sensitive examples even if it is small. Shipping only adapter weights is not a privacy guarantee. Membership inference, prompt extraction, and direct memorization tests are still relevant when the fine-tuning set contains private documents or user conversations.
 
 \section{Evaluation of Adapted Models}
+\index{catastrophic forgetting}\index{base-model regression}\index{domain evaluation}
 \label{sec:peft-evaluation}
 
 A PEFT report should include four classes of metrics. First, task metrics measure the reason for adaptation: exact match, execution accuracy, pass rate, retrieval-grounded answer quality, or human preference. Second, regression metrics measure what should not have changed: general chat quality, multilingual behavior, math, code, safety, and calibration. Third, systems metrics measure whether PEFT achieved the intended efficiency: trainable parameters, peak memory, training time, checkpoint size, tokens per second, and serving latency. Fourth, robustness metrics test sensitivity to prompt paraphrases, longer contexts, unseen schemas, and adversarial examples.
 
 Comparisons must be fair. A LoRA model trained for 10,000 target tokens should not be compared to a full fine-tune trained for 10 million target tokens without accounting for data. A QLoRA run should not be declared equivalent to full fine-tuning because one benchmark matches. A prompt-tuned model should not be penalized for consuming context length unless the deployment actually has a tight context budget. The question is not which PEFT method is globally best; it is which method gives enough adaptation under the memory, latency, storage, and governance constraints of the application.
+
+QLoRA's large experiment grid also shows a PEFT-specific trap: cheap training makes it easy to run many datasets, but dataset suitability can dominate dataset size. A small high-quality instruction set may beat a much larger mismatched mixture. PEFT reports should therefore state not only number of examples but source, filtering, task match, language and domain coverage, deduplication, and whether benchmark prompts or style leaked into tuning.
+
+Table~\ref{tab:lora-rank-accounting} gives a concrete scale check for common ranks in one square projection.
 
 \begin{table}[t]
 \caption{Example LoRA parameter counts for one square projection with width $d=4096$.}
@@ -151,14 +202,14 @@ Comparisons must be fair. A LoRA model trained for 10,000 target tokens should n
 \small
 \centering
 \begin{tabular}{@{}rrrr@{}}
-\hline\noalign{\smallskip}
+\toprule
 Rank $r$ & LoRA parameters $2rd$ & Full matrix parameters $d^2$ & Fraction \\
-\noalign{\smallskip}\svhline\noalign{\smallskip}
+\midrule
 4  & 32{,}768   & 16{,}777{,}216 & 0.20\% \\
 8  & 65{,}536   & 16{,}777{,}216 & 0.39\% \\
 16 & 131{,}072  & 16{,}777{,}216 & 0.78\% \\
 64 & 524{,}288  & 16{,}777{,}216 & 3.12\% \\
-\noalign{\smallskip}\hline
+\bottomrule
 \end{tabular}
 \end{table}
 
@@ -167,10 +218,20 @@ Rank $r$ & LoRA parameters $2rd$ & Full matrix parameters $d^2$ & Fraction \\
 
 \begin{description}
 \item[Adapter] A small trainable module inserted into a frozen pretrained network, often using a bottleneck projection and residual connection.
+\item[Zero-gated prompt adapter] A prompt-style adapter whose contribution is initially gated near zero so the frozen base path dominates early training.
 \item[LoRA] A low-rank additive update to selected weight matrices, usually mergeable into the base weights for inference.
+\item[rsLoRA] A LoRA scaling variant that uses $\alpha/\sqrt{r}$ rather than $\alpha/r$ to make higher-rank adapters easier to train.
+\item[DoRA] A weight-decomposed LoRA variant that learns magnitude separately from the low-rank direction and therefore changes both quality and inference overhead.
+\item[Activated LoRA] A LoRA variant that activates only after an invocation token sequence, enabling base-cache reuse before the boundary but preventing ordinary merging.
 \item[QLoRA] A recipe that trains LoRA adapters while storing the frozen base model in a low-bit quantized format.
+\item[LoftQ] A LoRA initialization strategy for quantized training that initializes adapter weights to reduce quantization error.
+\item[NF4] A 4-bit storage format used by QLoRA for approximately normal pretrained weights before dequantized computation; its behavior still depends on block size and scale handling.
+\item[Double quantization] Quantization of quantization constants, reducing the metadata overhead of low-bit block quantization.
+\item[Paged optimizer] An optimizer implementation that uses unified-memory paging to absorb activation-driven peak-memory spikes.
 \item[Rank] The dimension $r$ of the low-rank update in LoRA, controlling adapter capacity and parameter count.
 \item[Target modules] The model matrices or layers to which adapters are applied, such as attention projections or feed-forward projections.
+\item[Target parameters] Raw parameter tensors, such as some MoE expert tensors, that receive LoRA updates even when there is no \texttt{nn.Linear} module to wrap.
+\item[Trainable token indices] A PEFT configuration that tunes selected embedding rows without retraining the entire embedding matrix.
 \item[Merge] The process of adding a trained LoRA update into the base weight matrix for ordinary dense inference.
 \end{description}
 
@@ -182,6 +243,9 @@ Rank $r$ & LoRA parameters $2rd$ & Full matrix parameters $d^2$ & Fraction \\
 \item Implement Equation~\ref{eq:lora-update} for one linear layer. Initialize the adapter so that the adapted layer is initially identical to the base layer, then verify the equality numerically.
 \item Fine-tune the same small model with LoRA on query/value projections only and on all attention projections. Report trainable parameters, validation loss, task metric, and one regression metric.
 \item Design a QLoRA memory budget for a 7B-parameter model. List which terms come from quantized base weights, adapters, optimizer states, gradients, and activations.
+\item Write the reproducibility checklist for a QLoRA run, including storage dtype, compute dtype, block size, double quantization, target modules, gradient checkpointing, paged optimizer, maximum sequence length, peak memory, and dataset filtering.
+\item Design an evaluation plan for merging two LoRA adapters. Include domain-slice gains, regression tasks, safety checks, and benchmark-contamination checks for both source datasets.
 \item Choose a domain task where prompt tuning might be preferable to LoRA and one where LoRA might be preferable to prompt tuning. Justify the choice using deployment constraints.
 \item Suppose two adapters improve different tasks separately but fail when combined. Propose three diagnostic experiments to distinguish rank interference, conflicting data, and prompt-template mismatch.
+\item Write a modern LoRA configuration manifest for a QLoRA run. Include initialization, rsLoRA or DoRA choices, LoftQ path, module targets versus raw-parameter targets, trainable token indices, mergeability, quantization config, and runtime-only options.
 \end{enumerate}

@@ -1,8 +1,13 @@
 \chapter*{Declarations, Provenance, and Responsible Use}
+\phantomsection%
 \addcontentsline{toc}{chapter}{Declarations, Provenance, and Responsible Use}
 
 This manuscript is prepared from original explanatory text and public research papers or technical reports. It does not reproduce third-party slides, videos, dataset records, model outputs, code listings, or figures. When a public software project, dataset, model report, benchmark, law, or policy document is discussed, it is cited as a source rather than copied as content.
 
 The book discusses model training, deployment, alignment, data collection, evaluation, retrieval, and agentic systems. These topics carry risks involving privacy leakage, copyright infringement, unsafe generation, benchmark contamination, dual-use automation, and misleading evaluation. Chapters therefore include explicit safety, licensing, and evaluation cautions where those risks are material.
 
-No claim in the manuscript should be interpreted as legal advice, medical advice, security advice, or a recommendation to deploy an unreviewed model in a high-stakes environment.
+Readers who reproduce examples should treat data provenance, license compatibility, personally identifiable information, and benchmark contamination as experimental variables rather than administrative afterthoughts. A run that trains successfully is not automatically publishable. A model that answers a benchmark well is not automatically reliable under distribution shift. A retrieval or tool system that works in a notebook is not automatically safe when connected to private documents, external APIs, or actions that affect other people.
+
+The manuscript also separates educational mechanisms from deployment recommendations. Simplified objectives, toy datasets, small models, and controlled failure cases are used to make technical ideas inspectable. They should not be read as sufficient governance, privacy, security, or safety controls for production systems.
+
+No claim in the manuscript should be interpreted as legal advice, medical advice, security advice, or a recommendation to deploy an unreviewed model in a high-stakes environment. Deployment decisions require independent review of data rights, domain risk, evaluation coverage, monitoring, incident response, and applicable law.

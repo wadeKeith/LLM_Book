@@ -3,15 +3,21 @@
 
 \abstract{This chapter connects the preceding technical material to a durable research and engineering roadmap. It emphasizes from-scratch implementation, data pipelines, resource accounting, emerging frontier model designs, reasoning reinforcement learning, adaptive test-time compute, multimodal and generative systems, agentic systems, and the operational evidence needed to turn new papers into dependable systems.}
 
+\paragraph{Chapter contract.} The reader should leave this chapter able to read frontier papers through the lifecycle built in earlier chapters, extract reproducible claims, map them to implementation and measurement work, and decide which ideas are durable enough to enter a curriculum or system roadmap.
+
 \section{Why Frontier Practice Changes the Curriculum}
+\index{frontier model}\index{research roadmap}
 \label{sec:why-frontier-chapter}
 
 The preceding chapters explain the main lifecycle of a large language model: data, tokenization, architecture, pretraining, distributed systems, inference, adaptation, retrieval, alignment, reasoning, multimodality, generation, and evaluation. That lifecycle is stable enough to teach, but the frontier is not stable enough to freeze. The most important lesson from recent systems is that research progress often comes from changing the interface between chapters. A model report may describe an architectural change, but the observed gain may depend on the data mixture, optimizer, post-training recipe, evaluation harness, inference budget, and serving stack. A deployment result may look like an application result while actually being a systems result.
 
 The unifying discipline is experimental falsifiability. A serious practitioner should be able to state the objective, implement a minimal version, account for compute and memory, measure data quality, run scaling or ablation experiments, report inference cost, and explain how the measurement could be wrong. Stanford's CS336, \emph{Language Modeling from Scratch}, makes this discipline explicit by organizing the course around tokenization, PyTorch and resource accounting, architecture and hyperparameters, attention alternatives and mixture-of-experts, GPUs and kernels, parallelism, scaling laws, inference, evaluation, data processing, and alignment or reasoning RL \cite{stanfordcs3362026}. The same standard applies here: a chapter is complete only when the reader can connect a concept to an implementation, a measurement, and a failure mode.
 
+Figure~\ref{fig:frontier-practice-loop} summarizes the evidence loop for adding frontier claims to a durable curriculum.
+
 \begin{figure}[t]
 \centering
+\resizebox{\textwidth}{!}{%
 \begin{tikzpicture}[node distance=0.85cm and 0.9cm]
 \node[llmblock, text width=0.17\textwidth] (paper) {paper claim\\what changed};
 \node[llmblock, right=of paper, text width=0.17\textwidth] (minimal) {minimal system\\what reproduces it};
@@ -25,11 +31,14 @@ The unifying discipline is experimental falsifiability. A serious practitioner s
 \draw[llmdash] (invariants.north west) -- (minimal.south);
 \draw[llmdash] (invariants.north east) -- (measure.south);
 \end{tikzpicture}
+}%
+\Description{Evidence-loop diagram from paper claim to minimal system, measurement, and system decision, with durable invariants for data, objective, architecture, optimizer, runtime, evaluation, and governance.}
 \caption{Frontier practice is a loop from claim to minimal reproduction to measurement to system decision. Novel model names change quickly; the evidence loop should not.}
 \label{fig:frontier-practice-loop}
 \end{figure}
 
 \section{Scope of the Roadmap}
+\index{foundation model}\index{post-training pipeline}\index{deployment evaluation}
 \label{sec:coverage-audit}
 
 The roadmap covers the canonical decoder-only \transformer stack, LLaMA-class design, pretraining optimization, distributed training, inference serving, supervised instruction tuning, PEFT, domain adaptation, RAG, context engineering, typed memory, preference learning, reasoning, multimodality, generative foundation models, action interfaces, evaluation, safety, and governance. It also includes provenance and contamination concerns because modern foundation-model evidence is incomplete without them.
@@ -45,6 +54,7 @@ Third, the multimodal and generative chapter should be kept current. Qwen3-VL re
 Fourth, the alignment and reasoning chapters should track the shift from preference imitation toward verifiable reinforcement learning and adaptive inference. DeepSeek-R1 showed that reasoning behavior can be incentivized through large-scale RL on verifiable tasks without relying entirely on human-written reasoning traces \cite{deepseek2025r1}. Qwen3 reports model families with reasoning and non-reasoning modes, multilingual breadth, and open release practices \cite{yang2025qwen3}. Kimi K2 frames open-weight progress around agentic coding, tool use, long context, sparse MoE, and post-training for agent behavior \cite{kimi2025k2}. Surveys of RL for LLMs now treat PPO, DPO, GRPO, RLHF, RLAIF, and RLVR as one broader design space rather than isolated recipes \cite{srivastava2025rlsurvey}.
 
 \section{From-Scratch Practice as a Research Method}
+\index{from-scratch implementation}\index{replication}\index{ablation}
 \label{sec:from-scratch-practice}
 
 From-scratch practice is not nostalgia. It is a defense against cargo-cult model building. A reader who has implemented byte-pair encoding understands why token fertility affects multilingual performance. A reader who has written attention kernels, even in simplified form, understands why shape conventions and memory layout matter. A reader who has profiled a training step understands why global batch size, activation checkpointing, optimizer state, and communication overlap cannot be chosen independently.
@@ -54,6 +64,7 @@ The minimal implementation path should look like this. Start with a tokenizer an
 Only after that path is clear should the reader study large model reports. The reports will become less mysterious. A claim about a larger vocabulary becomes a claim about token efficiency and embedding size. A claim about MoE becomes a claim about active parameters, router stability, expert load balance, communication, and serving cost. A claim about long context becomes a claim about positional generalization, KV memory, retrieval behavior, and latency. A claim about reasoning becomes a claim about reward design, exploration, verifier quality, inference tokens, and selection bias.
 
 \section{Frontier Architecture Questions}
+\index{attention alternative}\index{sparse model}\index{hybrid model}
 \label{sec:frontier-architecture-questions}
 
 The book's architecture chapters emphasize decoder-only \transformers because they remain the reference design for most deployed language models. The frontier, however, is exploring at least five pressure points.
@@ -68,7 +79,38 @@ The fourth pressure point is generative objective choice. Autoregressive modelin
 
 The fifth pressure point is trainability. Optimizers, initialization, normalization, clipping, and precision formats matter more as models become sparse, deeper, longer-context, multimodal, generative, and more heterogeneous. Architecture cannot be separated from the training run that makes it stable.
 
+Figure~\ref{fig:frontier-evidence-ladder} is the practical rule this chapter uses for deciding when a frontier result should reshape the book rather than remain on a reading list.
+
+\begin{figure}[t]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[node distance=0.55cm and 0.55cm]
+\node[llmblock, text width=2.35cm] (watch) {watchlist\\claim and scope};
+\node[llmblock, right=of watch, text width=2.55cm] (compare) {public comparison\\leaderboard or report};
+\node[llmblock, right=of compare, text width=2.55cm] (repro) {lab reproduction\\ablation and cost};
+\node[llmblock, right=of repro, text width=2.55cm] (invariant) {chapter invariant\\stable concept};
+\node[llmblock, right=of invariant, text width=2.45cm] (gate) {release gate\\system checklist};
+
+\node[llmnote, below=0.65cm of compare, text width=2.65cm] (scope) {avoid score chasing\\inspect tasks and data};
+\node[llmnote, below=0.65cm of repro, text width=2.65cm] (cost) {record budget\\tokens, latency, failures};
+\node[llmnote, below=0.65cm of invariant, text width=2.65cm] (teach) {teach the mechanism\\not the model name};
+
+\draw[llmarrow] (watch) -- (compare);
+\draw[llmarrow] (compare) -- (repro);
+\draw[llmarrow] (repro) -- (invariant);
+\draw[llmarrow] (invariant) -- (gate);
+\draw[llmdash] (compare) -- (scope);
+\draw[llmdash] (repro) -- (cost);
+\draw[llmdash] (invariant) -- (teach);
+\end{tikzpicture}
+}
+\Description{An evidence ladder progresses from watchlist claims to public comparisons, lab reproduction, chapter invariants, and release gates, with notes on scope, cost, and teaching value.}
+\caption{Frontier material should move into the main text only after the claim has enough evidence to become a stable engineering invariant or release gate. The ladder reflects the book's use of CS336-style implementation evidence, public leaderboards, AILuminate-style safety benchmarks, and SWE-bench-style task harnesses \cite{stanfordcs3362026,huggingface2026leaderboards,mlcommons2026ailuminate,swebench2026verifieddataset}.}
+\label{fig:frontier-evidence-ladder}
+\end{figure}
+
 \section{Reasoning and Adaptive Test-Time Compute}
+\index{adaptive compute}\index{reasoning system}\index{verifier}
 \label{sec:adaptive-test-time-compute}
 
 Reasoning is now a compute-allocation problem. A model can answer with a short response, produce a long trace, sample many candidates, call tools, run code, retrieve documents, search a tree, or ask a verifier to choose. These choices spend different kinds of budget. Test-time scaling surveys increasingly organize the field by what is scaled, how it is scaled, where in the pipeline scaling occurs, and how quality should be measured \cite{zhang2025testtimescaling}. Budget-oriented surveys add another distinction: fixed controllability under a user-specified budget versus adaptive allocation based on difficulty, confidence, or intermediate evidence \cite{alomrani2025budget}.
@@ -78,6 +120,7 @@ This book therefore treats a reasoning method as incomplete unless it states fiv
 RLVR and GRPO-style training sharpen these questions. A reward that checks final answers can scale cheaply, but it may reward shortcuts. A process reward can guide intermediate steps, but labels are more expensive and can still be gamed. A group-relative baseline can simplify training by avoiding a learned critic, but it depends on group diversity. The same model can look better at pass@1 and worse at pass@k, or better under one token budget and worse under another. Evaluation must therefore report success, cost, latency, abstention, and failure modes together.
 
 \section{Data, Evaluation, and Governance as One Loop}
+\index{data governance}\index{evaluation loop}\index{provenance}
 \label{sec:data-evaluation-governance-loop}
 
 The data chapter and the evaluation chapter should be read as one loop. Data filtering creates the distribution a model learns. Evaluation claims what the model can do. Governance decides which data and evaluations are allowed to influence deployment. When these are separated, teams can accidentally optimize toward contaminated benchmarks, unsafe synthetic data, or metrics that are detached from user risk.
@@ -87,6 +130,7 @@ A current data pipeline should record source licenses, collection dates, filteri
 This is also where CS336-style implementation and frontier research meet. Data assignments that process Common Crawl, scaling assignments that fit loss curves, and alignment assignments that train reasoning models are not isolated course tasks. They are a compressed version of the lifecycle that real model teams must make auditable \cite{stanfordcs3362026}.
 
 \section{Frontier Evidence Matrix}
+\index{evidence matrix}\index{threat model}\index{publication checklist}
 \label{sec:frontier-evidence-matrix}
 
 New papers should enter the curriculum through evidence, not novelty pressure. A frontier claim is useful for this book when it changes a durable variable in the lifecycle and when that change can be reproduced, measured, and stress-tested. Table~\ref{tab:frontier-evidence-matrix} summarizes the screening logic.
@@ -121,6 +165,7 @@ One way to keep the decision explicit is to score a claim as
 where $\Delta Q$ is reproduced quality gain, $\Delta C$ is additional training or serving cost, $\Delta R$ is safety or governance risk, $U$ is residual uncertainty, and $E$ is independent evidence strength. The equation is not a universal metric. Its purpose is to prevent the curriculum from changing because a model name is new, a benchmark number is high, or a paper is fashionable before the underlying claim is stable.
 
 \section{A Reader's Roadmap After This Book}
+\index{reading plan}\index{research practice}
 \label{sec:reader-roadmap}
 
 The reader should leave the book with four durable habits. First, reduce every model claim to a contract: objective, data, architecture, training recipe, inference policy, and evaluation protocol. Second, implement the smallest system that exposes the relevant invariant. Third, compare models by task, cost, and risk rather than by name. Fourth, treat new papers as evidence to be tested, not as recipes to copy.

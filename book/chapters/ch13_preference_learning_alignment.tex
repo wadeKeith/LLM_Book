@@ -1,15 +1,21 @@
 \chapter{Preference Learning and Alignment}
 \label{ch:preference-learning-alignment}
 
-\abstract{This chapter explains how language models are adapted with preference data after pretraining and supervised instruction tuning. It covers pairwise preference collection, reward modeling, RLHF with PPO, KL regularization, direct preference optimization, post-DPO preference objectives such as KTO, ORPO, and SimPO, AI feedback, safety and refusal data, reward hacking, annotation protocols, systems costs, and the gap between preference learning and full alignment.}
+\abstract{This chapter explains how language models are adapted with preference data after pretraining and supervised instruction tuning. It covers pairwise preference collection, reward modeling, the Markov decision process view of language-model rollouts, RLHF with PPO, KL regularization, direct preference optimization, post-DPO preference objectives such as KTO, ORPO, and SimPO, AI feedback, safety and refusal data, reward hacking, annotation protocols, systems costs, and the gap between preference learning and full alignment.}
+
+\paragraph{Chapter contract.} The reader should leave this chapter able to treat preference learning as proxy optimization, document the data and policy choices behind comparisons, distinguish reward-model progress from release readiness, and explain how PPO, DPO, and later objectives inherit distribution-shift and safety risks.
 
 \section{Alignment as Preference Modeling}
+\index{alignment}\index{alignment!preference modeling}\index{alignment!proxy optimization}\index{preference modeling}\index{reward model}
 Pretraining teaches a model to imitate text. Supervised instruction tuning teaches it a conversational interface. Preference learning then asks a harder question: among several plausible responses, which response should the deployed assistant prefer? The answer may depend on helpfulness, truthfulness, harmlessness, style, legal constraints, user intent, and institutional policy. The central engineering challenge is that these properties are not a single ground-truth label. They are observed through noisy comparisons, rubrics, red-team examples, and downstream outcomes.
 
 Modern alignment pipelines therefore treat preference learning as a control layer around a capable base model. A typical pipeline starts from a supervised policy, samples multiple answers to user prompts, asks humans or AI judges to compare those answers, trains a reward or preference model, and then optimizes the policy toward the learned preference signal while constraining it not to drift too far from the reference model. This recipe descends from deep reinforcement learning from human preferences \cite{christiano2017deep}, language-model preference tuning \cite{ziegler2019finetuning,stiennon2020learning}, and instruction-following RLHF \cite{ouyang2022training}. The practical success of the recipe should not be confused with a proof of alignment. It is a way to optimize a proxy; the proxy can be incomplete, inconsistent, non-stationary, and vulnerable to gaming.
 
+Figure~\ref{fig:preference-learning-loop} summarizes the proxy-optimization loop and the need for independent release evaluation.
+
 \begin{figure}[t]
 \centering
+\resizebox{\textwidth}{!}{%
 \begin{tikzpicture}[node distance=7mm and 6mm]
 \node[llmblock, text width=2.1cm] (sft) {SFT\\policy};
 \node[llmblock, right=of sft, text width=2.1cm] (sample) {Sample\\candidates};
@@ -27,13 +33,16 @@ Modern alignment pipelines therefore treat preference learning as a control laye
 \draw[llmdash] (eval.north) .. controls +(0,1.0) and +(0,-1.0) .. node[above, font=\scriptsize] {new hard cases} (sample.south);
 \node[llmnote, below=8mm of eval, text width=0.78\textwidth] {Preference learning is a proxy-optimization loop. The release decision should depend on independent evaluation, not on the optimized reward alone.};
 \end{tikzpicture}
+}%
+\Description{Proxy-optimization loop from SFT policy to sampled candidates, human or AI preferences, reward or preference model, PPO, DPO, or variant optimization, independent evaluation, and candidate release.}
 \caption{A preference-learning control loop. The diagram synthesizes RLHF and direct-preference pipelines from preference-learning literature without reproducing any system-specific figure \cite{ouyang2022training,rafailov2023direct}.}
 \label{fig:preference-learning-loop}
 \end{figure}
 
-This chapter uses ``alignment'' in the operational sense common in LLM engineering: reducing systematic mismatches between model behavior and a specified preference or safety policy. It is not a claim that the model has internalized human values, that it will generalize safely under all distribution shifts, or that all stakeholders share the same preferences.
+This chapter uses ``alignment'' in the operational sense common in LLM engineering: reducing systematic mismatches between model behavior and a specified preference or safety policy.\index{alignment!release evaluation} It is not a claim that the model has internalized human values, that it will generalize safely under all distribution shifts, or that all stakeholders share the same preferences.
 
 \section{Preference Data}
+\index{preference data}\index{preference learning!data}\index{pairwise comparison}\index{annotation protocol}
 \subsection{From Labels to Comparisons}
 For many language tasks, direct labels are brittle. A summarization prompt may have many valid summaries; a medical information request may require both useful context and careful scope limits; a coding assistant may produce several correct patches with different maintainability tradeoffs. Preference learning replaces absolute labels with comparisons. For prompt $x$, annotators compare two completions $y_a$ and $y_b$ and produce a label such as
 \[
@@ -67,22 +76,24 @@ A preference rubric should decompose quality into observable criteria. A minimal
 \end{description}
 The rubric should say how to trade these criteria off. Without an explicit priority order, annotators will invent their own. Safety work especially needs boundary examples: requests that must be refused, requests that should be answered with safe alternatives, and requests that look sensitive but are legitimate.
 
+Some public safety preference datasets expose multiple labels, such as a helpfulness winner and separate safety flags for each response. Converting them into a single chosen/rejected pair is already a policy decision. One defensible rule is to use the helpfulness winner when both responses are safe, choose the safe response when only one response is safe, and filter or specially label pairs where both responses are unsafe. The important point is that this priority order becomes part of the reward model's target and must be recorded; otherwise later PPO or DPO results cannot be interpreted as helpfulness, harmlessness, or a mixture of both.
+
 \section{Reward Models}
+\index{reward model}\index{preference learning!reward model}\index{Bradley-Terry model}\index{reward hacking}
 \subsection{The Bradley-Terry Objective}
 A reward model $r_\phi(x,y)$ maps a prompt-response pair to a scalar. Pairwise preference modeling commonly uses the Bradley-Terry likelihood:
 \[
-    P_\phi(y_w \succ y_l \mid x)
-    =
-    \sigma\left(r_\phi(x,y_w)-r_\phi(x,y_l)\right),
+    \begin{aligned}
+    d_\phi(x,y_w,y_l) &= r_\phi(x,y_w)-r_\phi(x,y_l),\\
+    P_\phi(y_w \succ y_l \mid x) &= \sigma(d_\phi(x,y_w,y_l)),
+    \end{aligned}
 \]
 where $\sigma$ is the logistic sigmoid. The negative log-likelihood over a comparison dataset $\mathcal{D}$ is
 \[
     \mathcal{L}_{\mathrm{RM}}(\phi)
     =
-    -\mathbb{E}_{(x,y_w,y_l)\sim\mathcal{D}}
-    \left[
-        \log \sigma\left(r_\phi(x,y_w)-r_\phi(x,y_l)\right)
-    \right].
+    -\operatorname{avg}_{(x,y_w,y_l)\in\mathcal{D}}
+    \log \sigma(d_\phi(x,y_w,y_l)).
 \]
 Only reward differences matter. Adding a constant to all rewards for the same prompt does not change the pairwise probability. This is why raw reward-model scores should not be interpreted as calibrated utilities unless the training procedure includes explicit calibration.
 
@@ -104,6 +115,8 @@ The reward model is a proxy. Optimizing against it too aggressively can reduce r
 
 The operational symptom is a divergence between offline reward and independent evaluation. As optimization steps increase, reward-model score continues upward, but human preference, factuality, or task success plateaus and then degrades. The fix is not simply a better optimizer. It requires better data coverage, stronger adversarial evaluation, regularization, early stopping, and repeated collection of comparisons from the current policy.
 
+Figure~\ref{fig:reward-overoptimization} illustrates why optimized reward must be compared against independent human or task measures.
+
 \begin{figure}[t]
 \centering
 \begin{tikzpicture}[x=1cm,y=1cm]
@@ -116,38 +129,50 @@ The operational symptom is a divergence between offline reward and independent e
 \draw[dotted] (5.2,0) -- (5.2,4.0);
 \node[font=\scriptsize, align=center] at (5.2,-0.45) {early-stop\\region};
 \end{tikzpicture}
+\Description{Line chart with optimization steps on the horizontal axis and score on the vertical axis; reward-model score rises steadily while independent human or task score rises then falls after an early-stop region.}
 \caption{Reward overoptimization. A release process should monitor the gap between optimized reward and independent measures such as factuality, human preference, task success, and refusal false-positive rates.}
 \label{fig:reward-overoptimization}
 \end{figure}
 
 \section{RLHF with PPO}
+\index{proximal policy optimization}\index{RLHF!PPO}\index{KL penalty}\index{RLHF!KL penalty}\index{reference model}\index{policy optimization}
+\subsection{The MDP View}
+Classical reinforcement learning models sequential decision problems as a Markov decision process (MDP) with states, actions, transitions, rewards, and a discount factor \cite{sutton2018reinforcement}. Language-model RLHF is a special finite-horizon case. The prompt and generated prefix form the state $s_t=(x,y_{<t})$; the action $a_t$ is the next token or a short decoded unit; the transition appends the sampled token to the prefix; the episode ends at an end token or length limit; and the reward is often sparse, arriving only after the full response is scored by a reward model or verifier.
+
+This mapping explains the role of value functions. A state value
+\[
+    V^\pi(s_t)=\mathbb{E}_\pi\left[G_t \mid s_t\right]
+\]
+estimates expected future regularized return from the current prefix, while an action value $Q^\pi(s_t,a_t)$ estimates the same quantity after choosing a particular next token. The advantage
+\[
+    A^\pi(s_t,a_t)=Q^\pi(s_t,a_t)-V^\pi(s_t)
+\]
+asks whether the sampled token was better than the policy's baseline expectation for that prefix. PPO and related policy-gradient methods need an advantage estimate because terminal rewards alone give high-variance credit assignment over long token sequences. In LLM post-training, the MDP is simple in one sense---the next state is just the old text plus the sampled token---but hard in another: the action space is the vocabulary, the horizon is the response length, the reward is delayed and noisy, and the reference-policy KL term becomes part of the effective reward.
+
 \subsection{Regularized Policy Optimization}
 In RLHF, the language model is a policy $\pi_\theta(y\mid x)$ over response sequences. The reward model provides a sequence-level score $r_\phi(x,y)$. Because unconstrained reward maximization can destroy language quality and exploit reward-model errors, the objective includes a penalty against a reference policy $\pi_{\mathrm{ref}}$, usually the supervised instruction-tuned model:
 \[
-    \max_{\theta}
-    \mathbb{E}_{x\sim\mathcal{P},\,y\sim\pi_\theta(\cdot\mid x)}
-    \left[
-        r_\phi(x,y)
-        -
-        \beta\,\mathrm{KL}\!\left(
-            \pi_\theta(\cdot\mid x)
-            \,\Vert\,
-            \pi_{\mathrm{ref}}(\cdot\mid x)
-        \right)
-    \right].
+    \begin{aligned}
+    K_\theta(x)
+      &= D_{\mathrm{KL}}(\pi_\theta(\cdot\mid x)\,\Vert\,\pi_{\mathrm{ref}}(\cdot\mid x)),\\
+    J_{\mathrm{RLHF}}(\theta)
+      &= \operatorname{avg}_{x\sim\mathcal{P},\,y\sim\pi_\theta(\cdot\mid x)} r_\phi(x,y)
+         -\beta\,\operatorname{avg}_{x\sim\mathcal{P}} K_\theta(x),\\
+    \theta^\star
+      &= \arg\max_\theta J_{\mathrm{RLHF}}(\theta).
+    \end{aligned}
 \]
 The coefficient $\beta$ controls the alignment-strength versus drift tradeoff. A large $\beta$ keeps the policy close to the reference and may underuse the reward signal. A small $\beta$ permits larger improvements but increases the risk of reward hacking, style collapse, and safety regressions.
 
 In autoregressive models, the KL term is usually estimated token by token during rollout:
 \[
-    \widehat{\mathrm{KL}}(y)
-    =
-    \sum_{t=1}^{T}
-    \left[
-        \log \pi_\theta(y_t\mid x,y_{<t})
-        -
-        \log \pi_{\mathrm{ref}}(y_t\mid x,y_{<t})
-    \right].
+    \begin{aligned}
+    k_t
+      &= \log \pi_\theta(y_t\mid x,y_{<t})
+         - \log \pi_{\mathrm{ref}}(y_t\mid x,y_{<t}),\\
+    K_{\mathrm{tok}}(y)
+      &= k_1+\cdots+k_T.
+    \end{aligned}
 \]
 The scalar reward used by the RL algorithm can be written as a terminal reward plus per-token KL shaping. This turns a sparse sequence reward into a denser signal while preserving the regularized objective.
 
@@ -159,22 +184,21 @@ Proximal Policy Optimization (PPO) is widely used because it limits the size of 
     \frac{\pi_\theta(y_t\mid x,y_{<t})}
          {\pi_{\theta_{\mathrm{old}}}(y_t\mid x,y_{<t})}.
 \]
-With an advantage estimate $\hat{A}_t$, the clipped PPO objective is
+With an advantage estimate $A_t^{\mathrm{adv}}$, the clipped PPO objective is
 \[
-    \mathcal{L}_{\mathrm{PPO}}(\theta)
-    =
-    \mathbb{E}_t
-    \left[
-        \min
-        \left(
-            \rho_t(\theta)\hat{A}_t,
-            \mathrm{clip}(\rho_t(\theta),1-\epsilon,1+\epsilon)\hat{A}_t
-        \right)
-    \right].
+    \begin{aligned}
+    u_t(\theta) &= \rho_t(\theta)A_t^{\mathrm{adv}},\\
+    v_t(\theta) &= \mathrm{clip}(\rho_t(\theta),1-\epsilon,1+\epsilon)A_t^{\mathrm{adv}},\\
+    \mathcal{L}_{\mathrm{PPO}}(\theta) &= \operatorname{avg}_t \min(u_t(\theta),v_t(\theta)).
+    \end{aligned}
 \]
 RLHF implementations also train a value head $V_\psi(x,y_{<t})$ to estimate expected future regularized reward, often using generalized advantage estimation. The value head reduces gradient variance but adds another model component that can become miscalibrated under distribution shift.
 
+PPO failures are often visible before final reward collapses. The MOSS-RLHF ``Secrets of RLHF'' report argues that policy constraints are central to stable PPO training and recommends action-space diagnostics such as perplexity, response length, and KL divergence between the policy and reference model \cite{zheng2023secrets}. These metrics are useful because reward alone can rise while the policy moves into an out-of-distribution style that the reward model scores incorrectly.
+
 The InstructGPT pipeline used supervised fine-tuning, reward modeling, and PPO to produce models preferred by labelers over larger pretrained models on instruction-following tasks \cite{ouyang2022training}. That result is historically important because it showed that post-training data quality and preference optimization can dominate parameter count for user-facing behavior.
+
+PPO should not be treated as the part of RLHF that creates helpfulness by itself. The supervised policy provides the initial instruction-following interface and the rollout distribution. The reward model defines the direction of improvement from pairwise preferences. PPO is the constrained optimizer that moves the policy under that proxy. If the preference data omits a capability, safety boundary, language, or domain, PPO usually amplifies the reward model's blind spot rather than repairing it. Many practical RLHF systems therefore run multiple rounds: sample from the current policy, label new hard cases, retrain or refresh the reward model, optimize again, and evaluate independently.
 
 \subsection{Systems Costs}
 RLHF is expensive because it runs several large models in the loop:
@@ -187,11 +211,26 @@ RLHF is expensive because it runs several large models in the loop:
 \end{itemize}
 For each rollout, the system performs autoregressive generation, reward scoring, KL scoring, advantage computation, and one or more policy-gradient updates. Memory pressure is high because the optimizer must store activations for the policy update and logits for KL or importance ratios. Many production pipelines therefore use smaller reward models, parameter-efficient adapters, sequence packing, aggressive batching, and periodic rather than continuous reward-model refreshes.
 
+Multi-adapter RLHF is one practical way to reduce this memory burden. Instead of loading separate full checkpoints for the active policy, reward model, and reference model, a system can load one quantized base model and switch among role-specific adapters: a trainable policy adapter for PPO updates, a frozen reward-model adapter plus score head for reward computation, and a frozen base or reference adapter for KL scoring. This lowers memory, but it makes adapter state part of the RLHF correctness contract. The training loop must set the active adapter before every forward pass, freeze the reward adapter during scoring, restore the policy adapter before PPO updates, and log which adapter version produced each reward.
+
+A minimal PPO implementation makes the dataflow visible. It maps preference prompts into prompt-only queries, samples responses from the current policy with a fixed generation configuration, concatenates query and response text, scores the completed sequence with the reward model, and passes the scalar rewards to the PPO step along with the query and response tensors. The generation configuration is part of the training distribution: temperature, top-$p$, maximum new tokens, EOS handling, and forced-EOS processors change which states the reward model sees. If the framework shares parameters with an implicit reference path instead of loading a separate reference model, that choice should be logged with the KL configuration.
+
+Reward scaling is also part of the objective. Subtracting a baseline, dividing reward scores by a constant, clipping gradients, replacing NaN rewards, or reading the score from the final token are implementation choices that can stabilize a small run, but they change the effective signal seen by PPO. A report should log the raw reward distribution, the transformed reward distribution, the number of invalid rewards, and representative high-reward and low-reward samples.
+
 RLHF also has a data-systems cost. Prompts must be deduplicated, policy versions tracked, annotation decisions audited, unsafe content handled carefully, and privacy constraints enforced. If a dataset mixes user traffic, synthetic prompts, and red-team prompts, the provenance of each example should remain available during training and evaluation.
 
 \section{Direct Preference Optimization}
+\index{direct preference optimization}\index{direct preference optimization!implicit reward}\index{implicit reward}\index{preference objective!direct preference optimization}
 \subsection{The Implicit Reward View}
 Direct Preference Optimization (DPO) avoids online RL by deriving a supervised loss from the same KL-regularized preference objective \cite{rafailov2023direct}. Under the regularized optimum, an implicit reward can be written as
+\[
+  \pi_r(y\mid x)
+  =
+  \frac{1}{Z(x)}
+  \pi_{\mathrm{ref}}(y\mid x)
+  \exp(r(x,y)/\beta),
+\]
+where $Z(x)$ is the prompt-conditioned partition function induced by the reference policy and reward. Rearranging gives
 \[
     r(x,y)
     =
@@ -202,23 +241,35 @@ Direct Preference Optimization (DPO) avoids online RL by deriving a supervised l
 \]
 where $C(x)$ is a prompt-dependent constant that cancels in pairwise comparisons. Substituting this reward difference into the Bradley-Terry preference likelihood yields the DPO loss:
 \[
+    \begin{aligned}
+    m_\theta(x,y)
+      &= \log \pi_\theta(y\mid x)-\log \pi_{\mathrm{ref}}(y\mid x),\\
+    \Delta_\theta(x,y_w,y_l)
+      &= m_\theta(x,y_w)-m_\theta(x,y_l),\\
     \mathcal{L}_{\mathrm{DPO}}(\theta)
-    =
-    -
-    \mathbb{E}_{(x,y_w,y_l)}
-    \left[
-        \log \sigma
-        \left(
-            \beta
-            \left[
-                \log\frac{\pi_\theta(y_w\mid x)}{\pi_{\mathrm{ref}}(y_w\mid x)}
-                -
-                \log\frac{\pi_\theta(y_l\mid x)}{\pi_{\mathrm{ref}}(y_l\mid x)}
-            \right]
-        \right)
-    \right].
+      &= -\operatorname{avg}_{(x,y_w,y_l)}
+         \log \sigma(\beta\,\Delta_\theta(x,y_w,y_l)).
+    \end{aligned}
 \]
 DPO uses preference pairs directly, without training an explicit reward model or generating on-policy rollouts. This makes it simpler and more stable to implement than PPO, especially for smaller teams.
+
+The cancellation of $C(x)$ is the central trick. A reward model normally seems to require an intractable normalization over all possible completions, but pairwise preferences depend only on reward differences for the same prompt. DPO therefore trains the policy as both generator and implicit reward model. Its update is not a naive ``raise chosen and lower rejected'' rule: the gradient is weighted by how badly the current implicit reward ranks the pair. Pairs that the policy already orders correctly receive smaller updates, while pairs where the rejected answer still has higher implicit reward receive larger updates. The inverse-temperature $\beta$ controls both KL pressure toward the reference and the scale of this implicit reward.
+
+The implementation detail that matters most is the log-probability mask. In a chat example, $x$ contains system text, user text, separators, and sometimes retrieved context; $y_w$ and $y_l$ are assistant responses. The terms $\log \pi_\theta(y\mid x)$ and $\log \pi_{\mathrm{ref}}(y\mid x)$ should sum only over response tokens:
+\[
+  \begin{aligned}
+  \mathcal{M}_{\mathrm{resp}} &= (t_1,\ldots,t_m),\\
+  \ell_i &= \log \pi(y_{t_i}\mid x,y_{<t_i}),\\
+  \log \pi(y\mid x) &= \ell_1+\cdots+\ell_m,
+  \end{aligned}
+\]
+where $\mathcal{M}_{\mathrm{resp}}$ excludes prompt tokens and padding and usually includes the response end token if the deployment template relies on it. The policy and reference model must be scored with the same tokenizer, chat template, special tokens, and truncation rule. The reference model is frozen and evaluated without gradient. If one implementation sums response log probabilities and another averages them by response length, they are optimizing different objectives; length handling should therefore be stated explicitly in every DPO report.
+
+Length filtering should also be token-based, not string-based. Practical DPO trainers often expose separate \texttt{max\_prompt\_length}, \texttt{max\_target\_length}, and total \texttt{max\_length} settings. A preprocessing job should report how many pairs were dropped or truncated by each limit, and whether truncation affected chosen and rejected responses symmetrically. Otherwise the optimizer may learn from a biased subset where long helpful answers or long unsafe answers were removed before training.
+
+A common DPO diagnostic surprise is that the absolute log probabilities of both the chosen and rejected responses can decrease during training. This is not automatically a bug. The DPO objective pushes a relative log-ratio margin, not a supervised likelihood target for the chosen answer. Sequence probabilities compete with all other possible continuations, KL-like reference pressure can move both candidates down, and length handling can change absolute sums. What should improve is the chosen-versus-rejected margin under the stated scoring rule. A useful report therefore plots four curves: chosen response log probability, rejected response log probability, their policy-reference log ratios, and the resulting preference margin, alongside sampled output quality.
+
+Another failure mode is overfitting under nearly deterministic or sparsely sampled preferences. In the Bradley-Terry model, if the empirical data says that $y_w$ always beats $y_l$ for a prompt, the maximum-likelihood reward gap is unbounded. In DPO coordinates, this can appear as pressure to drive $\pi_\theta(y_l\mid x)$ toward zero, so a finite $\beta$ no longer acts like a stable practical guardrail for that pair. Identity Preference Optimization (IPO) makes this issue explicit by regressing the same policy-reference log-ratio gap toward a finite target margin rather than letting the preferred-dispreferred separation grow without bound \cite{azar2024general}. The lesson for implementation is that $\beta$, target margins, label noise, early stopping, and held-out preference margins are part of the objective, not cosmetic hyperparameters.
 
 \subsection{Tradeoffs}
 DPO is not free of assumptions. It is an offline method, so it learns from the candidate responses present in the preference dataset. If the dataset contains only weak negatives, DPO may not teach robust rejection of strong but unsafe completions. If preferred responses all share a teacher model's style, DPO may distill style more than preference. The reference model still matters: the log ratio penalizes deviations from it, and changing the reference can change the effective reward.
@@ -226,6 +277,7 @@ DPO is not free of assumptions. It is an offline method, so it learns from the c
 Several related methods modify the DPO recipe. IPO, KTO, ORPO, and other preference objectives adjust the treatment of margins, binary desirable/undesirable labels, or reference-free training. These variants are useful engineering tools, but the deeper question is unchanged: what behavior does the data define, and where does that definition fail?
 
 \section{Preference Objectives After DPO}
+\index{IPO}\index{preference objective!IPO}\index{KTO}\index{preference objective!KTO}\index{ORPO}\index{preference objective!ORPO}\index{preference objective!GRPO}
 \label{sec:preference-objectives-after-dpo}
 
 DPO made preference optimization feel like supervised learning, but it did not end the design space. The next wave of objectives asks which pieces of the RLHF pipeline are truly necessary: paired comparisons, a frozen reference model, a learned reward head, explicit KL control, and online rollouts. The answer depends on data availability and failure tolerance. A small open model trained from public preference data may prefer simplicity and reproducibility; a frontier assistant may pay extra systems cost to collect on-policy comparisons and safety red-team data.
@@ -239,6 +291,7 @@ SimPO also pursues reference-free preference optimization, using a reward based 
 These methods should not be ranked as a universal ladder. They are points in an engineering tradeoff space. A post-training report should state which labels are available, whether a reference model is used, how response length is handled, how safety categories are represented, and which independent evaluations guard against reward hacking. Preference objectives are easy to optimize and hard to interpret when the dataset is underspecified.
 
 \section{Safety, Refusal, and AI Feedback}
+\index{refusal}\index{safety tuning!refusal}\index{constitutional AI}\index{RLAIF}\index{safety tuning}
 \subsection{Helpful-Harmless Tradeoffs}
 Assistant training usually optimizes both helpfulness and harmlessness. The two are not independent. A model that refuses every sensitive prompt is safe in a narrow sense but useless. A model that answers every request is helpful in a narrow sense but dangerous. Anthropic's helpful-harmless work and Constitutional AI introduced explicit safety preference data and AI-generated critique/revision loops \cite{bai2022training,bai2022constitutional}. RLAIF scales this idea by using AI systems to generate some preference labels or direct rewards \cite{lee2023rlaif}.
 
@@ -256,6 +309,7 @@ Safety policy should be versioned like code. Each preference label is meaningful
 For high-risk domains, preference optimization should be paired with refusal evaluation, jailbreak testing, and human review. The policy should specify not only disallowed outputs but also expected safe completions. Users often need help reformulating a request, understanding risk, or finding legitimate resources. A refusal that merely says ``I cannot help'' may score well on a narrow safety metric while failing the broader user need.
 
 \section{Evaluation Cautions}
+\index{preference evaluation}\index{preference evaluation!overoptimization}\index{reward model overoptimization}
 \subsection{Preference Is Not Ground Truth}
 Preference labels measure what annotators choose under a rubric and interface. They do not necessarily measure long-term user welfare, truth, fairness, legal compliance, or moral value. This limitation is central to open problems in RLHF \cite{casper2023open}. Preference learning can make a model sound better without making it more reliable. It can also hide failures by teaching the model to hedge, flatter, or refuse in ways that satisfy raters.
 
@@ -271,25 +325,28 @@ Every stage introduces shift:
 A robust alignment process therefore repeats data collection after major model updates. Offline preference sets are useful for regression testing, but they cannot be the only source of evidence.
 
 \subsection{A Practical Diagnostic Table}
+Table~\ref{tab:preference-failure-modes} summarizes common failure modes and the diagnostics that should accompany release review.
+
 \begin{table}[t]
 \centering
 \begin{tabular}{p{0.22\textwidth}p{0.32\textwidth}p{0.32\textwidth}}
-\hline
+\toprule
 Failure mode & Symptom & Diagnostic response \\
-\hline
+\midrule
 Reward hacking & Reward score rises while human preference falls & Plot reward versus independent human eval across checkpoints; inspect high-reward samples \\
 Verbosity bias & Longer answers win despite no added substance & Length-controlled comparisons; judge with strict concision criteria \\
 Refusal overgeneralization & Benign sensitive prompts are refused & Boundary-set evaluation with comply/refuse/redirect labels \\
 Safety undergeneralization & Harmful variants bypass refusal & Red-team paraphrases, multimodal variants, and tool-use tests \\
 Annotator drift & Label distributions change over time & Gold examples, rubric refreshes, annotator calibration meetings \\
 Reward-model overconfidence & Large margins on ambiguous examples & Calibration curves, ensembles, and abstention thresholds \\
-\hline
+\bottomrule
 \end{tabular}
 \caption{Common preference-learning failure modes and diagnostics.}
 \label{tab:preference-failure-modes}
 \end{table}
 
 \section{Implementation Notes}
+\index{alignment pipeline}\index{dataset versioning}
 A small but defensible preference-learning pipeline can be organized as follows:
 \begin{enumerate}
     \item Start from a supervised instruction-tuned policy with a frozen chat template.
@@ -306,22 +363,29 @@ A small but defensible preference-learning pipeline can be organized as follows:
 
 \section{Key Terms}
 \begin{description}
-    \item[Preference data.] Comparisons or ratings that express which model outputs are preferred under a rubric.
-    \item[Reward model.] A learned scalar scoring function used as a proxy for preference.
-    \item[RLHF.] Reinforcement learning from human feedback, usually involving a reward model and policy optimization.
-    \item[KL regularization.] A penalty that keeps the optimized policy close to a reference policy.
-    \item[DPO.] A direct offline preference objective that optimizes pairwise preferences without an explicit reward model.
-    \item[Reference-free preference objective.] A post-training loss that optimizes preference data without scoring candidates under a frozen reference policy.
-    \item[RLAIF.] Reinforcement learning from AI feedback, where AI systems generate some preference labels, critiques, or rewards.
-    \item[Reward hacking.] Improving the proxy reward while degrading the intended behavior.
-    \item[Refusal boundary.] The policy line between requests the model should answer, refuse, or redirect.
+    \item[Preference data] Comparisons or ratings that express which model outputs are preferred under a rubric.
+    \item[Reward model] A learned scalar scoring function used as a proxy for preference.
+    \item[MDP] A Markov decision process with states, actions, transitions, rewards, and a discount factor; in language-model RL, prefixes are states and generated tokens are actions.
+    \item[RLHF] Reinforcement learning from human feedback, usually involving a reward model and policy optimization.
+    \item[Advantage] The difference between the estimated value of an action and the baseline value of the current state.
+    \item[KL regularization] A penalty that keeps the optimized policy close to a reference policy.
+    \item[DPO] A direct offline preference objective that optimizes pairwise preferences without an explicit reward model.
+    \item[DPO implicit reward] The reward represented by $\beta\log(\pi_\theta/\pi_{\mathrm{ref}})$ up to a prompt-dependent constant.
+    \item[Response-only log probability] The sequence log probability computed only on assistant response tokens, excluding prompt and padding tokens.
+    \item[Reference-free preference objective] A post-training loss that optimizes preference data without scoring candidates under a frozen reference policy.
+    \item[RLAIF] Reinforcement learning from AI feedback, where AI systems generate some preference labels, critiques, or rewards.
+    \item[Reward hacking] Improving the proxy reward while degrading the intended behavior.
+    \item[Refusal boundary] The policy line between requests the model should answer, refuse, or redirect.
 \end{description}
 
 \section{Exercises}
 \begin{enumerate}
     \item Train a toy Bradley-Terry reward model on synthetic pairwise comparisons. Plot held-out accuracy and calibration as you increase label noise.
+    \item Map a chat-model rollout to an MDP. Define the state, action, transition, terminal condition, reward, and discount choice.
     \item For a small instruction-tuned model, compute the token-level KL between sampled responses and a frozen reference model. Inspect examples with unusually high KL and explain what changed.
+    \item Starting from the KL-regularized reward objective, derive the proportional form $\pi_r(y\mid x)\propto\pi_{\mathrm{ref}}(y\mid x)\exp(r(x,y)/\beta)$ and explain why the partition function cancels in DPO pairwise comparisons.
     \item Implement the DPO loss for a batch of chosen/rejected responses. Verify that increasing $\beta$ changes the strength of the preference update.
+    \item Audit a DPO data collator. Check that prompt tokens, padding tokens, and truncated tokens are masked correctly for both chosen and rejected responses.
     \item Compare DPO with one reference-free preference objective on the same small dataset. Report response length, chosen/rejected log-probability gaps, and at least two out-of-domain regression metrics.
     \item Design a safety boundary set with ten comply prompts, ten refuse prompts, and ten redirect prompts for a domain of your choice. Write the rubric before writing the prompts.
     \item Take twenty model responses and label them under two different rubrics: one that prioritizes concision and one that prioritizes completeness. Measure how often the preferred response changes.

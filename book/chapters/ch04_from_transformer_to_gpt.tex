@@ -3,7 +3,10 @@
 
 \abstract{This chapter specializes the \transformer into a causal decoder. It covers next-token loss, GPT-style blocks, sampling, repetition control, loss curves, minimal training loops, and efficient attention as used in practical GPT implementations. GPT is best understood as an interface: train by teacher-forced next-token prediction, then use the same conditional distribution for autoregressive generation.}
 
+\paragraph{Chapter contract.} The reader should leave this chapter able to assemble a causal decoder stack, connect the training loss to logits and sampling behavior, explain why packing and masking choices change the objective, and separate base-model generation from chat-interface contracts.
+
 \section{The Decoder-Only Contract}
+\index{decoder-only Transformer}\index{Transformer!decoder-only}\index{autoregressive generation}
 \label{sec:decoder-only-contract}
 
 A GPT-style model is a stack of masked self-attention blocks trained to predict the next token. The architecture is decoder-only: there is no separate encoder memory, no bidirectional self-attention, and no masked-token objective. For a token sequence $x_{1:T}$, the model defines
@@ -13,9 +16,12 @@ A GPT-style model is a stack of masked self-attention blocks trained to predict 
 \end{equation}
 This factorization turns every position into a supervised target and makes arbitrary text usable as self-supervised data. GPT-2 and GPT-3 demonstrated that the same interface can support broad zero-shot and few-shot behavior when scaled over heterogeneous corpora \cite{radford2019language,brown2020language}.
 
+GPT-2 made this interface operational by treating naturally occurring web text as latent multitask data rather than as a set of manually labeled task datasets: translation pairs, summaries, question-answer patterns, and reading-comprehension fragments appear as text. GPT-3 then made the evaluation protocol explicit. Zero-shot, one-shot, and few-shot are inference-time conditioning regimes, not gradient updates. A few-shot result should state the task description, delimiter format, number of demonstrations $K$, how examples are sampled, context-window budget, answer extraction rule, and whether multiple-choice scoring uses raw, length-normalized, or otherwise calibrated likelihoods.
+
 The training and inference contracts must match. During training, teacher forcing supplies the true prefix $x_{<t}$ for all positions in parallel. During generation, the model receives its own sampled prefix one token at a time. Causal masking is the bridge between the two: it prevents the training computation at position $t$ from seeing targets that will be unavailable during generation.
 
 \section{Causal Language Modeling}
+\index{causal language modeling}\index{cross entropy}\index{teacher forcing}
 \label{sec:causal-language-modeling}
 
 In implementation, a packed block normally contains $T+1$ token ids. The model input is the first $T$ tokens and the label sequence is shifted by one:
@@ -41,6 +47,7 @@ Perplexity is $\exp(\mathcal{L})$ when natural logs are used. It is a useful los
 The most common GPT data bug is an incorrect shift. A quick test is to feed a known sequence such as \texttt{[10, 20, 30, 40]} and inspect one batch. The labels should be \texttt{[20, 30, 40, next]} for a stream sample or \texttt{[20, 30, 40, ignore]} for a bounded sample. If labels equal inputs, the model is being trained as an autoencoder, not a causal language model.
 
 \section{A Minimal GPT Block Stack}
+\index{GPT}\index{Transformer block}\index{logits}
 \label{sec:minimal-gpt-block-stack}
 
 A minimal GPT configuration fixes vocabulary size $V$, maximum block size $T_{\max}$, number of layers $L$, number of heads $H$, hidden width $d_{\mathrm{model}}$, dropout, and whether linear and normalization layers use bias terms. The forward pass has five stages:
@@ -56,18 +63,21 @@ GPT-style blocks commonly use pre-normalization:
 \begin{align}
   h^{(\ell+\frac{1}{2})}
     &= h^{(\ell)}
-       + \mathrm{MHA}\left(\mathrm{Norm}(h^{(\ell)})\right),\\
+       + \mathrm{MHA}(\mathrm{Norm}(h^{(\ell)})),\\
   h^{(\ell+1)}
     &= h^{(\ell+\frac{1}{2})}
-       + \mathrm{MLP}\left(\mathrm{Norm}(h^{(\ell+\frac{1}{2})})\right).
+       + \mathrm{MLP}(\mathrm{Norm}(h^{(\ell+\frac{1}{2})})).
 \end{align}
 The attention sublayer uses a causal mask; the MLP sublayer is tokenwise; residual additions preserve shape. Weight tying often reuses the token embedding matrix as the output projection matrix, reducing parameters and making input and output token spaces share representations.
+
+A nanoGPT-style implementation makes these contracts explicit in a few hundred lines of code \cite{karpathy2022nanogpt}. The model keeps learned token embeddings and learned absolute position embeddings, ties the token embedding matrix to the language-model head, and often pads the vocabulary size to a hardware-friendly multiple even though GPT-2 checkpoints themselves use 50,257 tokens. When importing GPT-2 weights from a library that represents projections as Conv1D-style matrices, several attention and MLP weights must be transposed before assignment. The residual projection weights are also initialized with a smaller standard deviation, approximately $0.02/\sqrt{2L}$, so residual streams do not grow too quickly with depth.
 
 Optimizer grouping is part of the implementation recipe. Weight decay is usually applied to large matrix weights but not to biases or normalization scale parameters. AdamW, learning-rate warmup, cosine decay, gradient clipping, mixed precision, checkpointing, and distributed data parallelism belong to the training system rather than the mathematical block, but they determine whether the block can be trained reliably. Chapter~\ref{ch:optimization-pretraining} returns to those details.
 
 Checkpoint metadata should include the model configuration, tokenizer identity, optimizer state, training step, random number state when resumability matters, and enough data-stream state to avoid accidentally repeating or skipping large parts of a corpus. A checkpoint that contains only weights is often sufficient for inference, but it is not sufficient for reproducible training.
 
 \section{Batching, Packing, and Loss Curves}
+\index{batching}\index{loss curve}\index{perplexity}\index{packing}
 \label{sec:batching-packing-loss-curves}
 
 The number of tokens per optimizer step is
@@ -77,46 +87,56 @@ The number of tokens per optimizer step is
 \end{equation}
 where $B_{\mathrm{micro}}$ is micro-batch size, $T$ is sequence length, $G$ is gradient accumulation steps, and $W$ is data-parallel world size. This quantity matters more than batch size alone because it controls gradient noise scale, throughput reporting, and how quickly the model consumes the corpus.
 
+Minimal GPT training code usually stores a tokenized corpus as a large integer stream rather than as a list of examples. For OpenWebText-style reproduction, GPT-2 BPE ids fit in \texttt{uint16}, documents are separated by an end-of-text token, and random offsets sample \texttt{x = data[i:i+T]} and \texttt{y = data[i+1:i+1+T]}. In distributed runs, the intended global tokens per iteration are recovered by multiplying micro-batch size, block size, data-parallel world size, and gradient accumulation steps; each process should divide the accumulated loss before backpropagation and synchronize gradients only on the last micro-step. These details are not bookkeeping trivia: a wrong accumulation scale changes the effective learning rate, and a missing document separator changes the language-modeling distribution.
+
 A healthy pretraining loss curve is smooth only after averaging. Individual steps can spike because a batch contains unusual data, long code spans, repeated tokens, or numerical instability. Validation loss should be estimated over enough batches to reduce sampling noise, and the validation set should be deduplicated from training data. Compute-optimal planning connects model size, token budget, and loss, but a run can still be wasteful if the data stream is low quality or the tokenizer expands important domains excessively \cite{hoffmann2022training}.
 
 Loss curves must be interpreted with evaluation context. A falling validation loss on web text does not guarantee better instruction following, factuality, long-context use, or safety. Conversely, a small domain model can have worse broad perplexity and better performance on a narrow, well-specified domain. The correct question is not whether loss improved, but whether loss improved on a measurement distribution that matches the intended claim.
 
 \section{From Logits to Text}
+\index{sampling}\index{temperature}\index{top-k sampling}\index{top-p sampling}\index{beam search}
 \label{sec:from-logits-to-text}
 
 At generation step $t$, the model produces logits $z_t\in\mathbb{R}^{V}$ for the next token. Greedy decoding selects $\arg\max_v z_{t,v}$. Greedy decoding is deterministic and useful for some constrained tasks, but it can produce repetitive or brittle text. Sampling draws from a probability distribution, usually
 \begin{equation}
   p(v\mid x_{<t}) =
-  \mathrm{softmax}\left(\frac{z_{t,v}}{\tau}\right),
+  \mathrm{softmax}(\frac{z_{t,v}}{\tau}),
 \end{equation}
 where $\tau>0$ is temperature. Lower temperature sharpens the distribution; higher temperature flattens it. Temperature is not a creativity knob in isolation. Its effect depends on model calibration, prompt, vocabulary, and any truncation rule.
 
 Top-$k$ sampling restricts the distribution to the $k$ highest-probability tokens before sampling. Nucleus, or top-$p$, sampling chooses the smallest set of tokens whose cumulative probability exceeds $p$ and samples within that set. Holtzman et al. introduced nucleus sampling as a response to degeneration in open-ended neural text generation \cite{holtzman2020curious}. Repetition penalties, presence penalties, frequency penalties, and no-repeat n-gram constraints further modify logits or candidate sets to discourage loops.
 
+A repetition penalty is a decoding-time logit transform, not a training objective. CTRL-style penalized sampling discounts tokens that already appeared in the generated prefix; a penalty of 1 leaves logits unchanged, while larger values discourage reuse \cite{keskar2019ctrl}. This can break loops under greedy or low-temperature decoding, but it also changes the probability of legitimate repeats such as variable names, quote marks, list bullets, rhymes, legal clauses, and code indentation. A generation report should state the exact transform, whether it is applied to prompt tokens or only generated tokens, its order relative to temperature, top-$k$, top-$p$, and logit bias, and examples where it suppresses valid repetition.
+
 Stopping is also part of decoding. Generation may stop at an EOS token, a maximum length, a user-defined delimiter, a tool-call boundary, or a safety policy. A stop string applied after detokenization is not equivalent to a stop token applied during decoding. Stop logic should be tested on partial tokens, whitespace variants, multilingual punctuation, and adversarial prompts that try to hide delimiters.
+
+Table~\ref{tab:decoding-controls} summarizes these decoding controls as operational choices rather than decorative sampling knobs.
 
 \begin{table}[t]
 \caption{Common decoding controls and their main risks.}
 \label{tab:decoding-controls}
 \small
 \begin{tabular}{@{}p{2.6cm}p{4.3cm}p{4.7cm}@{}}
-\hline\noalign{\smallskip}
+\toprule
 Control & Intended Effect & Risk \\
-\noalign{\smallskip}\svhline\noalign{\smallskip}
+\midrule
 Greedy & Deterministic highest-probability continuation & Repetition and poor exploration \\
 Temperature & Adjust distribution sharpness & Can amplify low-quality tails or collapse diversity \\
 Top-$k$ & Remove low-rank candidates & Fixed $k$ ignores uncertainty variation across steps \\
 Top-$p$ & Keep a dynamic probability nucleus & Sensitive to calibration and tokenization \\
 Repetition penalty & Discourage repeated tokens or spans & Can damage legitimate repetition in code, poetry, and lists \\
 Stop condition & End generation under protocol rules & String-level stops can fail on token-boundary variants \\
-\noalign{\smallskip}\hline
+\bottomrule
 \end{tabular}
 \end{table}
 
 \section{Efficient Attention and Generation}
+\index{FlashAttention}\index{KV cache}\index{efficient attention}
 \label{sec:gpt-efficient-attention-generation}
 
 Training a GPT block over a length-$T$ sequence computes all positions in parallel. Generation has two phases. In prefill, the prompt is processed as a full sequence and the model creates key-value tensors for every layer. In decode, one new token is processed at a time while reusing the previous keys and values. Without a KV cache, generating $n$ tokens after a prompt would repeatedly recompute the entire prefix. With a KV cache, each step computes new queries, keys, and values for the latest token and attends to cached keys and values.
+
+A teaching generation loop may deliberately skip the KV cache. It crops the growing context to the last \texttt{block\_size} tokens, runs a full forward pass, keeps only the final-position logits, divides by temperature, optionally applies top-$k$ truncation, samples one token, appends it, and repeats. This is compact and useful for checking model behavior, but it is not a serving benchmark: the loop recomputes the prefix every step and its sampling order becomes part of the experiment contract.
 
 The cache size for a dense multi-head decoder is approximately
 \begin{equation}
@@ -129,6 +149,8 @@ The factor of 2 stores keys and values. Long contexts and large batches can make
 FlashAttention improves exact attention by changing how the computation is tiled through the memory hierarchy \cite{dao2022flashattention}. It does not approximate the softmax attention formula; it avoids materializing large intermediate attention matrices in high-bandwidth memory and recomputes or streams quantities in an IO-aware way. This distinction is important. Some efficient attention methods change model semantics; FlashAttention is an implementation of the same attention operation under suitable masks and precisions.
 
 Efficient generation also depends on batching policy. Continuous batching improves device utilization by admitting new requests as others finish, but it complicates cache layout and stop handling. Prefix caching can reuse KV states for shared prompts, but it requires exact tokenizer and prompt-template equality. Quantized KV caches reduce memory but can affect long-context quality. These are serving-system choices, yet they feed back into model design through context length, number of KV heads, and tokenizer efficiency.
+
+Figure~\ref{fig:gpt-generation-loop} makes this generation state machine explicit.
 
 \begin{figure}[t]
 \centering
@@ -145,16 +167,18 @@ Efficient generation also depends on batching policy. Continuous batching improv
 \draw[llmarrow] (sample) -- (append);
 \draw[llmarrow] (append) -- (stop);
 \draw[llmarrow] (stop) -- node[below, font=\scriptsize] {continue} (cache);
-\draw[llmarrow] (cache) -| (sample);
+\draw[llmarrow] (cache.north) -- (sample.south);
 \draw[llmdash] (stop.east) -- ++(1.1,0) node[right, font=\scriptsize] {final response};
 \node[llmnote, below=8mm of sample, text width=0.78\textwidth] {Generation is a state machine. Sampling parameters, schema constraints, stop rules, stream callbacks, cancellation, safety filters, and cache updates must be ordered explicitly.};
 \end{tikzpicture}
 }
+\Description{State-machine diagram from serialized prompt to prefill logits, sampling or constraints, token append, stop decision, KV-cache update, and final response.}
 \caption{A GPT-style generation loop. The loop is mathematically simple but operationally rich: every token updates model state, user-visible stream state, and service resources.}
 \label{fig:gpt-generation-loop}
 \end{figure}
 
 \section{Evaluation Cautions}
+\index{benchmark contamination}\index{task framing}
 \label{sec:gpt-evaluation-cautions}
 
 GPT evaluation should separate loss, decoding behavior, and task accuracy. Loss is measured under teacher forcing; generation is measured under the model's own sampled prefixes. A model can have lower loss and worse open-ended samples if decoding is poorly chosen. A model can score well on a benchmark and fail in deployment if the benchmark is contaminated, too narrow, or unlike user prompts. A decoding configuration can improve a demo while reducing factuality or calibration.
@@ -162,6 +186,7 @@ GPT evaluation should separate loss, decoding behavior, and task accuracy. Loss 
 Report the tokenizer, context length, prompt format, decoding settings, number of samples, random seeds when relevant, and exact metric. For stochastic decoding, a single sample is a weak estimate. For pass-at-$k$ style coding or reasoning metrics, increasing $k$ spends more inference compute and should not be compared directly with a single-sample result unless that is the intended product budget.
 
 \section{Interface Contracts for Chat Models}
+\index{chat template}\index{role token}\index{stop sequence}\index{tool-call schema}
 \label{sec:gpt-interface-contracts}
 
 Chat models are often described as if the only difference from a base decoder were additional instruction data. Operationally, the difference is a contract between tokenizer, template, loss mask, decoding policy, and runtime. If a conversation is serialized as
@@ -171,7 +196,7 @@ Chat models are often described as if the only difference from a base decoder we
       \langle \mathrm{assistant}\rangle a_1
       \cdots,
 \end{equation}
-then training must define which spans are labels, which spans are conditioning context, which spans are tool observations, and which token sequences terminate a message. This contract should be tested like an API. A model can lose capability simply because the training template and serving template disagree about a role marker or end-of-message token.
+then training must define which spans are labels, which spans are conditioning context, which spans are tool observations, and which token sequences terminate a message. This contract should be tested like an API.\index{API} A model can lose capability simply because the training template and serving template disagree about a role marker or end-of-message token.
 
 \section{Key Terms}
 \label{sec:chapter-four-key-terms}
@@ -179,8 +204,10 @@ then training must define which spans are labels, which spans are conditioning c
 \begin{description}[Teacher forcing]
 \item[Autoregressive generation] Producing tokens one at a time while conditioning each step on previously generated tokens.
 \item[Causal language modeling] Training a model to predict each token from only earlier tokens.
+\item[In-context learning] Specifying a task at inference time with instructions and examples in the prompt rather than by updating model weights.
 \item[KV cache] Stored key and value tensors reused during decoding to avoid recomputing the prefix.
 \item[Nucleus sampling] Sampling from the smallest token set whose cumulative probability exceeds a threshold $p$.
+\item[Repetition penalty] A decoding-time logit or candidate-set modification that discourages tokens or spans already present in the generated context.
 \item[Teacher forcing] Training with true previous tokens supplied as context for every target position.
 \item[Weight tying] Sharing the token embedding matrix with the output projection matrix.
 \end{description}
@@ -193,5 +220,7 @@ then training must define which spans are labels, which spans are conditioning c
 \item Implement a tiny GPT block with shape assertions after embedding, attention, MLP, final normalization, and logits. Test that logits have shape $B \times T \times V$ during training and $B \times 1 \times V$ during cached single-token decoding.
 \item Train a character-level causal model on a small public-domain text. Plot training loss and validation loss, then explain one sign of overfitting and one sign of a data or label bug.
 \item On the same prompt and model, compare greedy, temperature sampling, top-$k$, and top-$p$ decoding. Hold maximum length and stop conditions fixed, and describe how conclusions change across at least five random seeds.
+\item Design zero-shot, one-shot, and few-shot prompt formats for the same classification benchmark. Specify the delimiter, demonstration sampling rule, answer extraction rule, and likelihood normalization used for scoring.
+\item Add a repetition penalty to a generation loop. State whether prompt tokens count as repeated tokens, where the processor runs relative to temperature and truncation, and give one example where the penalty harms a valid repeated token.
 \item Compute KV-cache memory for a 24-layer model with $B=8$, $T=4096$, $H=16$, $d_h=64$, and bfloat16 cache tensors. How does the answer change if grouped-query attention uses 4 KV heads?
 \end{enumerate}

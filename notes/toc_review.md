@@ -39,3 +39,7 @@ After the frontier review, the manuscript uses 17 chapters. The additional final
 ## Latest Structure Decision
 
 The current structure remains appropriate for a high-positioned book because it treats modern foundation-model work as one lifecycle: data, objectives, architecture, systems, adaptation, applications, evaluation, and governance. The main correction was to broaden Chapter 15 so the book is not limited to text-only LLMs. Unified understanding-generation models, diffusion/rectified-flow generation, AR-diffusion hybrids, any-to-any omni interfaces, and VLA/action models are now covered inside the same chapter rather than split into isolated survey-style chapters.
+
+## Latest Verification
+
+`make toc-review-check` now verifies that this review note's converged structure stays aligned with the English controlling manuscript. The latest run found 17 documented TOC chapters and 17 manuscript chapters in the same order.

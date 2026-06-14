@@ -3,13 +3,19 @@
 
 \abstract{This chapter closes the book by treating evaluation, safety, and governance as part of LLM engineering rather than as afterthoughts. It covers benchmark design, benchmark contamination, human evaluation, LLM-as-judge methods, long-context and agentic evaluation, multimodal generation evaluation, factuality, hallucination, robustness, red teaming, interpretability, unlearning, watermarking, provenance, privacy, copyright, model cards, dataset documentation, system cards, frontier risk frameworks, operational monitoring, incident response, and deployment limits.}
 
+\paragraph{Chapter contract.} The reader should leave this chapter able to turn a model-release question into a measurement plan, recognize benchmark and judge-model failure modes, connect safety and governance controls to operational evidence, and decide when a system should not be deployed.
+
 \section{Evaluation as a Measurement System}
+\index{evaluation system}\index{evaluation!decision rule}\index{evaluation!uncertainty}\index{measurement error}\index{benchmark suite}
 Evaluation is the feedback loop that tells an engineering team whether a modeling decision helped. Safety and governance define whether the resulting system should be deployed, who is accountable, and what evidence must be collected before and after release. For LLMs, these concerns are inseparable. A model can improve on a public benchmark while becoming less reliable for the actual product. A safety filter can reduce obvious harmful completions while increasing refusal of benign requests. A benchmark can saturate, leak into training data, or reward the wrong behavior.
 
 This chapter organizes evaluation as a measurement system. A measurement system has a construct, a dataset, a protocol, a metric, an uncertainty estimate, and a decision rule. ``MMLU score'' or ``win rate'' is not enough. The team must know what capability the metric is supposed to measure, where the examples came from, how the model was prompted, whether tools were allowed, how outputs were parsed, and what deployment decision follows from the result.
 
+Figure~\ref{fig:evaluation-evidence-loop} summarizes the evidence loop used throughout this chapter.
+
 \begin{figure}[t]
 \centering
+\resizebox{\textwidth}{!}{%
 \begin{tikzpicture}[node distance=0.85cm and 0.9cm]
 \node[llmblock, text width=0.17\textwidth] (construct) {construct\\what is measured};
 \node[llmblock, right=of construct, text width=0.17\textwidth] (protocol) {protocol\\prompt, tools, budget};
@@ -25,11 +31,14 @@ This chapter organizes evaluation as a measurement system. A measurement system 
 \draw[llmarrow] (failures.north) -- (protocol.south);
 \draw[llmarrow] (decision.south) |- (monitor.east);
 \end{tikzpicture}
+}%
+\Description{Evidence-loop diagram connecting construct, protocol, metric with uncertainty, launch or rollback decision, monitoring, and failure analysis.}
 \caption{Evaluation is an evidence loop. A benchmark result is actionable only when it is tied to a construct, protocol, uncertainty estimate, failure analysis, monitoring plan, and deployment decision.}
 \label{fig:evaluation-evidence-loop}
 \end{figure}
 
 \section{Evaluation Design}
+\index{evaluation harness}\index{evaluation!harness}\index{rubric}\index{metric}\index{sampling}
 \subsection{From Question to Decision}
 Every evaluation should begin with a decision. Examples:
 \begin{itemize}
@@ -53,17 +62,30 @@ A useful evaluation card should include:
 \end{description}
 This template prevents benchmark results from becoming detached from engineering decisions.
 
+\subsection{Evaluation Harnesses as Code}
+A benchmark name is not a runnable evaluation. A practical harness must define the sample schema, prompt template, model-call interface, answer extractor, scorer, aggregation rule, and artifact format. Simple-evals-style implementations make this explicit by separating a sampler from task-specific evaluators \cite{openai2024simpleevals}. The same model completion can be scored very differently depending on whether the harness extracts a multiple-choice letter, parses a final boxed mathematical answer, asks another model to judge equivalence, or executes code.
+
+The implementation details are part of the measurement protocol. MMLU-style multiple-choice tasks need answer-order handling and a clear final-answer pattern \cite{hendrycks2020measuring}. MATH-style tasks often rely on exact-answer normalization and conventions such as a boxed final answer \cite{hendrycks2021math}. GPQA-style tasks randomize choices to reduce shortcut learning \cite{rein2023gpqa}. DROP-style reading-comprehension tasks need normalization for numbers, dates, spans, and multi-part answers \cite{dua2019drop}. MGSM-style multilingual reasoning tasks test whether a few-shot or chain-of-thought protocol transfers across languages rather than only across English prompts \cite{shi2022mgsm}. HumanEval-style code evaluation must execute generated programs against tests in a sandbox with timeouts and resource limits; otherwise the evaluator itself becomes a security risk \cite{chen2021codex}.
+
+Multiple-choice scoring is a concrete example of why the harness matters. One protocol asks the model to generate a final letter and exact-matches the parsed \texttt{A}/\texttt{B}/\texttt{C}/\texttt{D}; it tests the whole prompt-following and parsing pipeline but can fail when the model says the right answer in another form. A second protocol reads the next-token logits for the choice labels and normalizes only over the allowed labels; it avoids invalid generations but depends on tokenization and label priors. A third protocol appends each candidate answer and scores its conditional negative log probability or perplexity; scoring the answer text rather than only the option letter can reduce letter bias, but it changes the measured object from generation behavior to conditional likelihood. Reports should therefore name the scoring path, whether choices were shuffled, how invalid outputs were handled, and whether few-shot, chain-of-thought, \texttt{pass@}N, or majority-vote sampling was used.
+
+Every run should write an audit trail: model identifier, prompt template, decoding settings, tool permissions, retrieved context if any, raw response, parsed answer, score, exception, runtime, cost, and commit or dataset version. Aggregate scores without per-sample records are hard to debug. Per-sample records also make regression analysis possible: when a new model loses three points, the team can determine whether the loss came from parsing failures, refusals, hallucinations, code timeouts, retrieval errors, or genuine capability regression.
+
 \section{Benchmarks and Failure Modes}
+\index{benchmark contamination}\index{evaluation!benchmark contamination}\index{benchmark saturation}\index{leaderboard}
 \subsection{Capability Benchmarks}
-Public benchmarks give shared reference points. MMLU measures broad multiple-choice knowledge across academic subjects \cite{hendrycks2020measuring}. HELM argues for holistic evaluation across scenarios, metrics, and transparency artifacts \cite{liang2022holistic}. GPQA targets graduate-level science questions designed to be difficult even with web access \cite{rein2023gpqa}. SWE-bench evaluates whether models can resolve real GitHub issues in real repositories \cite{jimenez2023swebench}. Humanity's Last Exam and BrowseComp reflect a 2025 shift toward harder, more multimodal, and agentic evaluations at the frontier \cite{phan2025humanity,openai2025browsecomp}.
+Public benchmarks give shared reference points. MMLU measures broad multiple-choice knowledge across academic subjects \cite{hendrycks2020measuring}. MATH tests competition-style mathematical problem solving \cite{hendrycks2021math}. HumanEval checks code-generation functional correctness \cite{chen2021codex}. DROP measures discrete reasoning over paragraphs \cite{dua2019drop}. MGSM probes multilingual chain-of-thought reasoning \cite{shi2022mgsm}. HELM argues for holistic evaluation across scenarios, metrics, and transparency artifacts \cite{liang2022holistic}. GPQA targets graduate-level science questions designed to be difficult even with web access \cite{rein2023gpqa}. SWE-bench evaluates whether models can resolve real GitHub issues in real repositories \cite{jimenez2023swebench}. Humanity's Last Exam and BrowseComp reflect a 2025 shift toward harder, more multimodal, and agentic evaluations at the frontier \cite{phan2025humanity,openai2025browsecomp}.
 
 These benchmarks are useful, but each measures a specific construct. MMLU does not measure conversational helpfulness. GPQA does not measure safe deployment. SWE-bench depends on repository setup, tests, and agent harness design. BrowseComp measures web-browsing research behavior under a particular protocol, not general truthfulness. Benchmark literacy means knowing what a benchmark excludes.
+
+Emergence claims are benchmark claims. If a task looks random for small models and strong for large models, the evaluator should first ask whether the curve is being shaped by the metric, the prompt, the answer extractor, or the model series being compared \cite{wei2022emergent}. For generative tasks, exact match may miss partial progress; for multiple-choice tasks, normalized likelihood and calibration can tell a different story from argmax accuracy. A useful evaluation card for an emergent ability plots every model point, includes chance and trivial baselines, reports confidence intervals, and preserves raw log probabilities or cross-entropy where possible.
 
 \subsection{pass@k and Selection Effects}
 Code and reasoning benchmarks often report pass@k: the probability that at least one of $k$ generated samples passes. If a single sample has independent success probability $p$, then
 \[
-    \mathrm{pass@}k = 1-(1-p)^k.
+    \mathrm{pass@}k = 1-\operatorname{pow}(1-p,k).
 \]
+Here $\operatorname{pow}(1-p,k)$ denotes the $k$th power of the single-sample failure probability.
 Independence rarely holds exactly, but the formula shows why pass@k is not the same as single-attempt reliability. A model with low pass@1 can look strong at pass@100 if sampling diversity is high and verification is cheap. For deployed agents, the relevant number may be pass@1 under a latency budget, pass@k with an automated verifier, or pass@k followed by human review.
 
 \subsection{Benchmark Contamination}
@@ -86,6 +108,7 @@ Video deserves its own caution. VBench++ dissects video generation into fine-gra
 Embodied and action systems add real-world accountability. A VLA benchmark should report task success, recovery after failure, unsafe action rate, intervention rate, latency, embodiment transfer, and whether test tasks share objects, scenes, operators, or teleoperation policies with training data. Simulation can accelerate evaluation, but it is not a substitute for real deployment evidence unless the sim-to-real gap is measured. For robotics, a low average failure rate may still be unacceptable if rare failures damage property or harm people.
 
 \section{Human Evaluation}
+\index{human evaluation}\index{inter-annotator agreement}\index{pairwise preference}
 \subsection{Rubrics and Pairwise Preference}
 Human evaluation remains necessary when outputs are open-ended, values are contested, or task success is hard to automate. Pairwise preference is often more reliable than scalar scoring, but it needs a rubric. Annotators should know whether to prioritize factuality over style, safety over completeness, or concision over coverage. Ambiguous prompts should allow ties or ``cannot judge'' labels.
 
@@ -101,6 +124,7 @@ Report human evaluation with:
 Without these details, a reported 55\% win rate may be meaningful or noise.
 
 \subsection{LLM-as-Judge}
+\index{LLM-as-judge}\index{model judge|see{LLM-as-judge}}
 LLM judges reduce cost and improve iteration speed. MT-Bench, Chatbot Arena, and related work show that strong models can approximate human preferences for many assistant comparisons \cite{zheng2023judging,chiang2024chatbot}. G-Eval and similar methods use structured prompts and rubrics to grade generated text \cite{liu2023geval}. These methods are useful for development, but they are not neutral measurement instruments.
 
 Common judge biases include:
@@ -114,16 +138,17 @@ Common judge biases include:
 Mitigations include answer-order randomization, length controls, judge ensembles, rubric-specific grading, calibration against human labels, and adversarial judge tests. For high-stakes launches, LLM judges should support human evaluation, not replace it.
 
 \section{Factuality, Hallucination, and Robustness}
+\index{hallucination}\index{factuality}\index{robustness}\index{calibration}
 \subsection{Truthfulness and Factual Precision}
 Truthfulness is not identical to confidence or fluency. TruthfulQA targets questions where imitation of common misconceptions leads to false answers \cite{lin2021truthfulqa}. FActScore decomposes long-form generations into atomic facts and measures support against a knowledge source \cite{min2023factscore}. HaluEval collects hallucination examples for detection and analysis \cite{li2023halueval}. RAG evaluation frameworks measure context relevance, answer faithfulness, and answer correctness for retrieval-augmented systems \cite{es2023ragas,gan2025rag}.
 
 For a generated answer $A$ decomposed into atomic claims $c_1,\ldots,c_n$, a simple factual precision estimate is
 \[
+    \begin{aligned}
+    S(A) &= \{i\in\{1,\ldots,n\}: c_i \text{ is supported by evidence}\},\\
     \mathrm{FactPrecision}(A)
-    =
-    \frac{1}{n}
-    \sum_{i=1}^{n}
-    \mathbf{1}\{c_i \text{ is supported by evidence}\}.
+      &= |S(A)|/n.
+    \end{aligned}
 \]
 This metric emphasizes precision, not completeness. A model can be precise by saying very little. Deployment evaluation should pair factual precision with coverage, abstention, and usefulness.
 
@@ -138,6 +163,7 @@ Robustness testing changes the input while preserving the intended task. Example
 For RAG and tool systems, robustness includes component failures. The retriever may return stale evidence, the tool may time out, a parser may fail, or an API may change. The evaluation harness should inject such failures and verify graceful degradation.
 
 \section{Safety Evaluation}
+\index{safety evaluation}\index{safety!policy taxonomy}\index{red teaming}\index{red team|see{red teaming}}\index{jailbreak}\index{policy taxonomy}
 \subsection{Policy Taxonomy}
 Safety evaluation starts with a policy taxonomy. A typical taxonomy includes self-harm, violence, weapons, cyber abuse, fraud, privacy invasion, sexual content, hate and harassment, regulated advice, child safety, and illegal activity. Each category needs allowed, disallowed, and borderline examples. The taxonomy must also define how the assistant should respond: refuse, redirect, provide high-level educational context, ask a clarifying question, or escalate.
 
@@ -152,12 +178,15 @@ Safety metrics should separate:
 \end{itemize}
 A single ``safety score'' hides the tradeoff between over-refusal and under-refusal.
 
+Safety taxonomies should also be language- and domain-aware. Baichuan 2's harmlessness evaluation describes a Chinese-English safety set spanning bias and discrimination, insults and profanity, illegal or unethical content, physical health, mental health, financial privacy, and sensitive topics \cite{yang2023baichuan2}. The important pattern is not the exact taxonomy name, but the slice design: a bilingual or domain model needs safety probes written in the languages and risk contexts where it will be used, including categories such as health, finance, privacy, and politically sensitive content that are easy to under-sample in generic red-team sets.
+
 \subsection{Red Teaming}
-Red teaming searches for failures, not average-case performance. It should include manual experts, automated prompt mutation, multilingual attacks, role-play, prompt injection, tool-use attacks, long-context attacks, and multimodal attacks. Findings should be converted into regression tests, but the team should expect adversaries to adapt after deployment.
+Red teaming searches for failures, not average-case performance.\index{safety!red teaming} It should include manual experts, automated prompt mutation, multilingual attacks, role-play, prompt injection, tool-use attacks, long-context attacks, and multimodal attacks. Findings should be converted into regression tests, but the team should expect adversaries to adapt after deployment.
 
 Frontier model system cards increasingly report safety evaluations, external red teaming, and risk-framework decisions. OpenAI's 2025 Preparedness Framework update and o3/o4-mini system card describe tracked risk categories and safeguards for reasoning models \cite{openai2025preparedness,openai2025o3o4mini}. Anthropic's Claude system cards and Responsible Scaling Policy describe capability thresholds and AI Safety Level safeguards \cite{anthropic2025claude4,anthropic2026rspv3}. Such reports are useful evidence, but they should be read with attention to scope, omitted details, and residual uncertainty.
 
 \section{Governance}
+\index{model card}\index{dataset card}\index{system card}\index{governance!system card}\index{risk management}\index{governance!risk management}\index{governance!framework}\index{governance!incident response}\index{audit}
 \subsection{Documentation}
 Documentation turns evaluation into an auditable artifact. Model cards describe intended use, limitations, evaluation results, and ethical considerations \cite{mitchell2019model}. Datasheets and data statements document dataset motivation, collection, composition, preprocessing, recommended uses, and risks \cite{gebru2021datasheets,bender2018data}. For LLM systems, these ideas extend to system cards that cover model, tools, retrieval sources, filters, monitoring, and deployment constraints.
 
@@ -175,24 +204,55 @@ A useful LLM system card includes:
 \subsection{Risk Management Frameworks}
 Governance frameworks provide structure for risk decisions. NIST AI RMF 1.0 organizes AI risk work around govern, map, measure, and manage functions \cite{nist2023airmf}; the NIST Generative AI Profile adapts these ideas to generative AI risks such as hallucination, data privacy, misuse, and information integrity \cite{nist2024genai}. The European Union AI Act creates a risk-based legal framework with obligations for high-risk systems and general-purpose AI models \cite{europeanunion2024aiact}. These frameworks do not replace engineering judgment, but they force teams to document risk ownership, evaluation evidence, and post-deployment controls.
 
-A concrete governance review should map every launch decision to an evaluation card. For example, a customer-support RAG assistant might require at least 95\% retrieval recall on a private escalation set, factual precision above 98\% on cited claims, unsafe-compliance rate below 0.5\% on policy probes, false-refusal rate below 3\% on benign sensitive prompts, and p95 latency below the product threshold. Each number needs an uncertainty interval. For a binary metric with $k$ failures in $n$ examples, a simple standard-error approximation is
+A concrete governance review should map every launch decision to an evaluation card. For example, a customer-support RAG assistant might require at least 95\% retrieval recall on a private escalation set, factual precision above 98\% on cited claims, unsafe-compliance rate below 0.5\% on policy probes, false-refusal rate below 3\% on benign sensitive prompts, and p95 latency below the product threshold. Each number needs an uncertainty interval. For a binary metric with $k$ failures in $n$ examples, a common normal-approximation variance term is
 \[
-    \mathrm{SE}
+    \mathrm{SE}^{2}
     =
-    \sqrt{\frac{\hat{p}(1-\hat{p})}{n}},
+    \frac{\hat{p}(1-\hat{p})}{n},
     \qquad
     \hat{p}=k/n,
 \]
-but low failure rates often require exact or bootstrap intervals rather than a normal approximation. A launch gate that ignores uncertainty can approve a model because the sample was too small to expose rare failures.
+where the standard error is the square root of this variance term. Low failure rates often require exact or bootstrap intervals rather than a normal approximation. A launch gate that ignores uncertainty can approve a model because the sample was too small to expose rare failures.
 
 Operationally, governance also needs an owner and a rollback path. A release record should name the policy version, model version, retrieval index version, tool permissions, logging retention period, review queue, incident severity rubric, rollback trigger, and communication plan. Copyright and privacy review should happen before data enters training or retrieval: if a source cannot be redistributed, revoked, audited, or access-controlled, it should not be silently absorbed into a weight update.
+
+Figure~\ref{fig:governance-release-crosswalk} shows the engineering crosswalk that turns broad governance frameworks into release artifacts.
+
+\begin{figure}[t]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[node distance=0.55cm and 0.65cm]
+\node[llmblock, text width=2.45cm] (scope) {scope\\use, users, harms};
+\node[llmblock, right=of scope, text width=2.55cm] (eval) {evaluation card\\metrics and slices};
+\node[llmblock, right=of eval, text width=2.55cm] (risk) {risk register\\owners and thresholds};
+\node[llmblock, right=of risk, text width=2.55cm] (controls) {controls\\mitigations and policy};
+\node[llmblock, right=of controls, text width=2.45cm] (ops) {operations\\monitor, incident, rollback};
+
+\node[llmnote, below=0.65cm of eval, text width=2.7cm] (measure) {measure\\uncertainty and red team};
+\node[llmnote, below=0.65cm of risk, text width=2.7cm] (govern) {govern\\responsibility and law};
+\node[llmnote, below=0.65cm of controls, text width=2.7cm] (manage) {manage\\residual risk};
+
+\draw[llmarrow] (scope) -- (eval);
+\draw[llmarrow] (eval) -- (risk);
+\draw[llmarrow] (risk) -- (controls);
+\draw[llmarrow] (controls) -- (ops);
+\draw[llmdash] (eval) -- (measure);
+\draw[llmdash] (risk) -- (govern);
+\draw[llmdash] (controls) -- (manage);
+\draw[llmdash] (ops.north) .. controls +(0,0.95cm) and +(0,0.95cm) .. node[above, font=\scriptsize] {post-deployment evidence updates release gates} (scope.north);
+\end{tikzpicture}
+}
+\Description{A governance release crosswalk moves from scope to evaluation cards, risk registers, controls, and operations, with feedback from monitoring back to scope.}
+\caption{Governance becomes actionable when framework language is mapped to release artifacts, owners, controls, monitoring, and rollback paths. The crosswalk synthesizes NIST AI RMF, the NIST Generative AI Profile, the EU AI Act, OpenAI governance frameworks, and Anthropic's RSP \cite{nist2023airmf,nist2024genai,europeanunion2024aiact,openai2025preparedness,openai2026frontiergovernance,anthropic2026rspv3}.}
+\label{fig:governance-release-crosswalk}
+\end{figure}
 
 \subsection{Interpretability, Unlearning, and Watermarking}
 Governance needs technical levers, but none should be oversold. Mechanistic interpretability tries to identify features, circuits, or causal pathways inside a model. Anthropic's work on monosemantic features and circuit tracing shows that increasingly large models can sometimes be decomposed into interpretable computational structure, but these methods are still partial views rather than complete safety proofs \cite{templeton2024monosemanticity,anthropic2025circuit}. They are most useful when paired with interventions, counterexamples, and downstream behavior tests.
 
-Unlearning addresses a different question: how can a model be made to stop producing or relying on targeted knowledge, private data, copyrighted material, or unsafe capabilities after training? Surveys of LLM unlearning emphasize that removal claims require careful evaluation of retained utility, extraction resistance, relearning risk, and collateral damage \cite{qiu2025unlearning}. A model that stops answering one memorized prompt may still leak the same information through paraphrase, retrieval, or fine-tuning.
+Unlearning addresses a different question: how can a model be made to stop producing or relying on targeted knowledge, private data, copyrighted material, or unsafe capabilities after training?\index{unlearning} Surveys of LLM unlearning emphasize that removal claims require careful evaluation of retained utility, extraction resistance, relearning risk, and collateral damage \cite{qiu2025unlearning}. A model that stops answering one memorized prompt may still leak the same information through paraphrase, retrieval, or fine-tuning.
 
-Watermarking and provenance tools aim to identify generated content or trace model outputs. Token-level watermarking schemes can bias sampling so generated text carries a detectable statistical signal \cite{kirchenbauer2023watermark}. For multimodal generation, provenance also includes metadata, content credentials, visible labels, model cards, and platform policy. NIST's synthetic-content transparency report treats authentication, provenance tracking, labeling, watermarking, detection, testing, and auditing as complementary technical approaches rather than a single silver bullet \cite{nist2024syntheticcontent}. C2PA specifications define a technical standard for certifying the source and history of media content through content credentials and related provenance artifacts \cite{c2pa2026spec}.
+Watermarking and provenance tools aim to identify generated content or trace model outputs.\index{watermarking}\index{provenance!watermarking} Token-level watermarking schemes can bias sampling so generated text carries a detectable statistical signal \cite{kirchenbauer2023watermark}. For multimodal generation, provenance also includes metadata, content credentials, visible labels, model cards, and platform policy.\index{content credentials}\index{provenance!content credentials} NIST's synthetic-content transparency report treats authentication, provenance tracking, labeling, watermarking, detection, testing, and auditing as complementary technical approaches rather than a single silver bullet \cite{nist2024syntheticcontent}. C2PA specifications define a technical standard for certifying the source and history of media content through content credentials and related provenance artifacts \cite{c2pa2026spec}.
 
 These tools are necessary but limited. Metadata can be stripped, visual watermarks can be cropped, statistical watermarks can be weakened by paraphrase or editing, and provenance chains can become ambiguous when generated assets are remixed. A governance policy should therefore layer signals: model-side watermarking, signed content credentials, visible labeling where appropriate, platform detection, user reporting, and incident response. The release decision should state which signals are required for which modalities and what the system does when provenance is absent or conflicting.
 
@@ -213,19 +273,22 @@ Monitoring must respect privacy. Logs should minimize sensitive data, enforce re
 Some systems should not be deployed even if benchmark scores are high. Reasons include inadequate evaluation coverage, inability to monitor harms, high false-confidence risk, lack of domain oversight, legal restrictions, or severe misuse potential. A launch decision should weigh capability, uncertainty, reversibility, affected population, and available mitigations. ``The model is better than the previous model'' is not by itself a deployment argument.
 
 \section{Evaluation Checklist}
+\index{release criteria}\index{incident response}\index{safety!refusal boundary}
+Table~\ref{tab:evaluation-checklist} turns those release criteria into a compact review checklist.
+
 \begin{table}[t]
 \centering
 \begin{tabular}{p{0.24\textwidth}p{0.31\textwidth}p{0.31\textwidth}}
-\hline
+\toprule
 Area & Question & Evidence \\
-\hline
+\midrule
 Task success & Does the system solve the user problem? & In-domain test set, human task review, tool success logs \\
 Factuality & Are claims supported? & Atomic fact checks, retrieval faithfulness, abstention tests \\
 Safety & Does it refuse the right requests? & Unsafe compliance and false refusal rates by category \\
 Robustness & Does behavior survive perturbation? & Paraphrases, adversarial prompts, drift tests \\
 Cost & Is the method deployable? & Latency, token use, hardware utilization, dollars per task \\
 Governance & Can decisions be audited? & Model card, data documentation, policy version, incident process \\
-\hline
+\bottomrule
 \end{tabular}
 \caption{A compact checklist for LLM evaluation and deployment review.}
 \label{tab:evaluation-checklist}
@@ -233,23 +296,25 @@ Governance & Can decisions be audited? & Model card, data documentation, policy 
 
 \section{Key Terms}
 \begin{description}
-    \item[Construct.] The underlying capability or behavior an evaluation intends to measure.
-    \item[Benchmark contamination.] Exposure of benchmark items or solutions during training or tuning.
-    \item[pass@k.] Probability that at least one of $k$ generated candidates passes an evaluation.
-    \item[LLM-as-judge.] Use of a language model to score, rank, or critique outputs.
-    \item[Hallucination.] Generated content that is unsupported or false in the relevant context.
-    \item[Calibration.] Agreement between stated confidence and empirical correctness.
-    \item[Red teaming.] Adversarial testing intended to discover failures.
-    \item[Unlearning.] A post-training intervention intended to remove or suppress targeted knowledge or behavior while preserving unrelated capability.
-    \item[Watermarking.] A method for embedding or detecting statistical or metadata signals that indicate generated content.
-    \item[Content credentials.] Cryptographically signed provenance metadata describing the source, edits, or generative process associated with a media asset.
-    \item[Model card.] Structured documentation of model use, evaluation, and limitations.
-    \item[Risk management.] The process of identifying, measuring, mitigating, monitoring, and governing risks.
+    \item[Construct] The underlying capability or behavior an evaluation intends to measure.
+    \item[Evaluation harness] The runnable code and configuration that turn samples, prompts, model calls, parsers, scorers, and aggregation into an auditable measurement.
+    \item[Benchmark contamination] Exposure of benchmark items or solutions during training or tuning.
+    \item[pass@k] Probability that at least one of $k$ generated candidates passes an evaluation.
+    \item[LLM-as-judge] Use of a language model to score, rank, or critique outputs.
+    \item[Hallucination] Generated content that is unsupported or false in the relevant context.
+    \item[Calibration] Agreement between stated confidence and empirical correctness.
+    \item[Red teaming] Adversarial testing intended to discover failures.
+    \item[Unlearning] A post-training intervention intended to remove or suppress targeted knowledge or behavior while preserving unrelated capability.
+    \item[Watermarking] A method for embedding or detecting statistical or metadata signals that indicate generated content.
+    \item[Content credentials] Cryptographically signed provenance metadata describing the source, edits, or generative process associated with a media asset.
+    \item[Model card] Structured documentation of model use, evaluation, and limitations.
+    \item[Risk management] The process of identifying, measuring, mitigating, monitoring, and governing risks.
 \end{description}
 
 \section{Exercises}
 \begin{enumerate}
     \item Write an evaluation card for a small LLM application. Include construct, population, protocol, metric, uncertainty, and launch threshold.
+    \item Implement a tiny benchmark harness for ten multiple-choice questions. Save raw responses, parsed answers, scores, model version, and decoding settings as JSONL.
     \item For a benchmark of your choice, list three ways contamination could occur and two mitigations that would still work after public release.
     \item Run a pairwise human evaluation on twenty prompts with two model variants. Compute win rate and a bootstrap confidence interval.
     \item Design an LLM-as-judge prompt for factual QA. Then list at least five judge biases and how you would test for them.

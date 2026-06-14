@@ -1,23 +1,29 @@
 \chapter*{Glossary}
 \addcontentsline{toc}{chapter}{Glossary}
 
-\begin{description}[Grouped-query attention]
+\begin{description}[Group relative policy optimization]
 \item[Attention]\index{attention} A content-dependent mixing operation that forms query, key, and value representations and aggregates values according to query-key compatibility.
 \item[Benchmark contamination]\index{benchmark contamination} Exposure of benchmark items, answers, or close variants during training, tuning, prompt development, or evaluation harness construction.
-\item[Context window]\index{context window} The maximum number of tokens a model can condition on during a forward pass.
-\item[Direct preference optimization]\index{Direct preference optimization} A preference-learning objective that fits a policy from chosen/rejected response pairs without training a separate online reward model.
-\item[Grouped-query attention]\index{grouped-query attention} Attention in which several query heads share each key-value head, reducing KV-cache memory relative to full multi-head attention.
-\item[Instruction tuning]\index{instruction tuning} Fine-tuning a pretrained model on examples that pair user-like instructions with target responses.
-\item[KV cache]\index{KV cache} Stored key and value tensors from previous decoding steps, reused to avoid recomputing attention over the prefix.
-\item[Mixture of experts]\index{mixture of experts} A sparse architecture in which a router sends each token to a subset of expert networks, separating total parameters from active parameters.
-\item[Parameter-efficient adaptation]\index{parameter-efficient adaptation} Fine-tuning methods that update a small set of parameters or adapters while leaving most base-model weights frozen.
+\item[Context window]\index{context window}\index{long context|see{context window}} The maximum number of tokens a model can condition on during a forward pass.
+\item[Direct preference optimization]\index{direct preference optimization}\index{DPO|see{direct preference optimization}} A preference-learning objective that fits a policy from chosen/rejected response pairs without training a separate online reward model.
+\item[Group relative policy optimization]\index{group relative policy optimization}\index{GRPO|see{group relative policy optimization}} A policy-optimization style that compares sampled responses within a group and uses their relative rewards as a baseline.
+\item[Grouped-query attention]\index{grouped-query attention}\index{GQA|see{grouped-query attention}}\index{attention!grouped-query attention} Attention in which several query heads share each key-value head, reducing KV-cache memory relative to full multi-head attention.
+\item[Instruction tuning]\index{instruction tuning}\index{supervised fine tuning|see{instruction tuning}} Fine-tuning a pretrained model on examples that pair user-like instructions with target responses.
+\item[KV cache]\index{KV cache}\index{KV cache!decoding} Stored key and value tensors from previous decoding steps, reused to avoid recomputing attention over the prefix.
+\item[Large language model]\index{large language model}\index{LLM|see{large language model}} A language model whose capability depends on the coupled scale of parameters, data, computation, post-training, and deployment system design.
+\item[Mixture of experts]\index{mixture of experts}\index{MoE|see{mixture of experts}}\index{mixture of experts!routing} A sparse architecture in which a router sends each token to a subset of expert networks, separating total parameters from active parameters.
+\item[Multi-head attention]\index{multi-head attention}\index{MHA|see{multi-head attention}} Attention with several independent query, key, and value projection heads.
+\item[Multi-head latent attention]\index{multi-head latent attention}\index{MLA|see{multi-head latent attention}} An attention variant that compresses part of the key-value state into latent representations for serving efficiency.
+\item[Multi-query attention]\index{multi-query attention}\index{MQA|see{multi-query attention}} Attention in which all query heads share one key-value head, reducing decode-time KV-cache memory and bandwidth.
+\item[Parameter-efficient adaptation]\index{parameter-efficient adaptation}\index{fine-tuning|see{parameter-efficient adaptation}} Fine-tuning methods that update a small set of parameters or adapters while leaving most base-model weights frozen.
 \item[Preference model]\index{preference model} A model or implicit objective that represents which of two candidate responses should be preferred under a target policy or annotation protocol.
-\item[Retrieval-augmented generation]\index{retrieval-augmented generation} A generation pattern in which external documents are retrieved and inserted into the model context before or during answer generation.
-\item[RLHF]\index{RLHF} Reinforcement learning from human feedback, usually involving preference data, reward modeling, and policy optimization under a reference-model constraint.
-\item[RLVR]\index{RLVR} Reinforcement learning with verifiable rewards, where correctness can be checked by an answer key, execution, proof checker, or task-specific verifier.
-\item[RoPE]\index{RoPE} Rotary position embeddings, which inject position by rotating query and key coordinates before attention scores are computed.
+\item[Proximal policy optimization]\index{proximal policy optimization}\index{PPO|see{proximal policy optimization}} A clipped policy-gradient method often used in RLHF to update a policy while limiting the size of each change.
+\item[Retrieval-augmented generation]\index{retrieval-augmented generation}\index{RAG|see{retrieval-augmented generation}} A generation pattern in which external documents are retrieved and inserted into the model context before or during answer generation.
+\item[RLHF]\index{RLHF}\index{human feedback|see{RLHF}}\index{reinforcement learning from human feedback|see{RLHF}} Reinforcement learning from human feedback, usually involving preference data, reward modeling, and policy optimization under a reference-model constraint.
+\item[RLVR]\index{RLVR}\index{reinforcement learning with verifiable rewards|see{RLVR}} Reinforcement learning with verifiable rewards, where correctness can be checked by an answer key, execution, proof checker, or task-specific verifier.
+\item[RoPE]\index{rotary position embedding}\index{RoPE|see{rotary position embedding}} Rotary position embeddings, which inject position by rotating query and key coordinates before attention scores are computed.
 \item[State-space model]\index{state-space model} A sequence model family that updates a compact state across positions, often used to reduce long-context cost relative to full attention.
 \item[Synthetic data]\index{synthetic data} Training data generated or transformed by models or programs, often filtered by validators, reward models, or human audits.
-\item[Test-time compute]\index{test-time compute} Additional computation spent at inference time through longer reasoning traces, multiple samples, verification, search, or refinement.
-\item[Tool use]\index{tool use} A system pattern in which a model selects and conditions on external operations such as retrieval, code execution, calculators, browsers, or database queries.
+\item[Test-time compute]\index{test-time compute}\index{test-time compute!inference budget} Additional computation spent at inference time through longer reasoning traces, multiple samples, verification, search, or refinement.
+\item[Tool use]\index{tool use}\index{tools|see{tool use}} A system pattern in which a model selects and conditions on external operations such as retrieval, code execution, calculators, browsers, or database queries.
 \end{description}

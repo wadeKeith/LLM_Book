@@ -1,9 +1,12 @@
 \chapter{Supervised Instruction Tuning}
 \label{ch:supervised-instruction-tuning}
 
-\abstract{This chapter explains how pretrained models become instruction-following models through supervised examples. It covers chat templates, task diversity, Alpaca-style self-instruction, synthetic data, refusal data, data quality, and the limits of imitation.}
+\abstract{This chapter explains how pretrained models become instruction-following systems through supervised examples. It covers chat templates, task diversity, Alpaca-style self-instruction, synthetic data, refusal data, data quality, task-specific SFT, loss masking, and the limits of imitation before preference learning or deployment evaluation.}
+
+\paragraph{Chapter contract.} The reader should leave this chapter able to convert a base-model training view into an assistant-interface training view, specify chat-template and label-mask contracts, evaluate instruction data quality, and explain why imitation is necessary but insufficient for alignment.
 
 \section{The Interface Shift}
+\index{supervised instruction tuning}\index{prompt-completion format}\index{chat assistant}
 \label{sec:sft-interface-shift}
 
 A pretrained decoder is trained to continue text. A deployed assistant is expected to answer a request, respect a role hierarchy, follow a formatting contract, refuse some requests, use tools when permitted, and stop when the answer is complete. Supervised instruction tuning, usually shortened to SFT, is the first post-training stage that teaches this interface. It does not change the causal language-model factorization from Chapter~\ref{ch:what-makes-language-models-large}; it changes the distribution of sequences on which the model is optimized.
@@ -14,14 +17,20 @@ Let an instruction example contain a context $c$ and a target assistant response
 \end{equation}
 where some tokens are input-only and other tokens are response targets. SFT minimizes next-token loss only on the target positions,
 \begin{equation}
-  \mathcal{L}_{\mathrm{SFT}}(\theta)
-  = -\frac{1}{\sum_{t=1}^{T} m_t}
-      \sum_{t=1}^{T} m_t \log p_{\theta}(z_t \mid z_{<t}),
+  \begin{gathered}
+  M_{\mathrm{mask}} = m_1+\cdots+m_T,\\
+  g_t = m_t\log p_{\theta}(z_t \mid z_{<t}),\\
+  \mathcal{L}_{\mathrm{SFT}}(\theta)=-(g_1+\cdots+g_T)/M_{\mathrm{mask}}.
+  \end{gathered}
   \label{eq:sft-masked-loss}
 \end{equation}
 where $m_t=1$ for response tokens to be imitated and $m_t=0$ for prompt tokens, padding, and usually separator tokens. In many training libraries this mask is implemented by setting ignored labels to \texttt{-100}. The small detail matters: if the loss is charged on user instructions or system text, the model is trained to generate prompts rather than only answers.
 
 Instruction tuning became central because large base models already possess many latent capabilities, but they do not reliably infer the desired user-facing protocol from a raw prompt. FLAN-style work showed that fine-tuning on tasks expressed as natural-language instructions improves zero-shot generalization to unseen task types \cite{wei2021finetuned}. InstructGPT used supervised demonstrations as the first stage before reward modeling and \rlhf, making clear that SFT is useful but not a complete alignment method \cite{ouyang2022training}. Modern open model reports treat SFT as one component of a larger post-training pipeline with preference data, safety data, red-teaming, and deployment evaluation \cite{touvron2023llama2,dubey2024llama3}.
+
+Instruction tuning and downstream task SFT should be distinguished in reports. Instruction tuning uses broad, reusable examples whose instruction text describes the task in natural language, so the model learns a general interface across translation, summarization, extraction, coding, dialogue, and refusal. Task SFT is narrower: it adapts a model to a product workflow, domain corpus, schema, or customer style, and it may be implemented as full fine-tuning or as a PEFT run. The same loss can be used in both cases, but the evidence required is different. Instruction tuning should prove breadth and held-out task generalization; task SFT should prove workflow improvement without losing base capabilities.
+
+Figure~\ref{fig:sft-interface-contract} summarizes this shift from continuation modeling to a serialized assistant interface.
 
 \begin{figure}[t]
 \centering
@@ -39,11 +48,13 @@ Instruction tuning became central because large base models already possess many
 \draw[llmdash] (audit.north east) -- (mask.south);
 \end{tikzpicture}
 }
+\Description{Pipeline diagram from pretrained decoder to chat template, masked supervised fine-tuning loss, and assistant interface, with an audit record connected to template and mask.}
 \caption{SFT changes the interface distribution rather than the causal language-model factorization. The engineering contract is the combination of template, masking, metadata, and validation, not merely a prompt-answer pair.}
 \label{fig:sft-interface-contract}
 \end{figure}
 
 \section{Instruction Data as a Contract}
+\index{chat template}\index{system message}\index{instruction data}
 \label{sec:instruction-data-contract}
 
 An instruction dataset is not merely a list of prompts and answers. It is a behavioral contract for the model. A good record states who is speaking, what authority each message has, which external evidence is available, what output format is required, and what should happen when the request is impossible or unsafe. A weak record leaves these details implicit, so the model learns correlations that are convenient in the dataset but fragile in deployment.
@@ -55,16 +66,16 @@ Table~\ref{tab:sft-data-types} summarizes common SFT example types. A single tra
 \label{tab:sft-data-types}
 \small
 \begin{tabular}{@{}p{2.4cm}p{4.1cm}p{4.2cm}@{}}
-\hline\noalign{\smallskip}
+\toprule
 Data Type & Contract Being Taught & Typical Failure If Under-Specified \\
-\noalign{\smallskip}\svhline\noalign{\smallskip}
+\midrule
 Single-turn instructions & Map one user request to one answer & Verbose, generic, or format-breaking answers \\
 Multi-turn dialogue & Maintain state, resolve references, and repair mistakes & Forgetting earlier constraints or over-trusting stale context \\
 Structured tasks & Emit JSON, SQL, code, labels, or other constrained outputs & Invalid syntax despite semantically plausible text \\
 Tool traces & Decide when to call a tool and how to use observations & Hallucinated tool results or repeated invalid calls \\
 Refusal and safety data & Decline disallowed requests while helping with safe alternatives & Over-refusal, under-refusal, or inconsistent tone \\
 Domain demonstrations & Adopt domain vocabulary and workflow conventions & Shallow style imitation without factual grounding \\
-\noalign{\smallskip}\hline
+\bottomrule
 \end{tabular}
 \end{table}
 
@@ -73,9 +84,12 @@ The template is part of the dataset. For a chat model, the same semantic example
 Data quality must be evaluated at several levels. At the example level, the answer should be correct, complete, and consistent with the instruction. At the dataset level, tasks should be balanced across skills, lengths, languages, domains, and refusal categories. At the provenance level, the builder must know which sources can be redistributed, which sources may contain personally identifiable information, and which benchmarks must be excluded from training. Benchmark contamination is especially serious in instruction tuning because many public evaluation tasks are also phrased as instructions \cite{shi2023detecting,xu2024benchmark}.
 
 \section{Synthetic Instruction Data}
+\index{teacher model}\index{rejection sampling}\index{Self-Instruct}
 \label{sec:synthetic-instruction-data}
 
 Human-written demonstrations are expensive. Synthetic instruction generation tries to expand coverage by asking a capable model to create new tasks, inputs, and answers. Self-Instruct is the canonical recipe: seed the process with a small set of human-written instructions, prompt a model to generate new instructions and demonstrations, filter malformed or near-duplicate examples, and then fine-tune on the resulting set \cite{wang2022selfinstruct}. Alpaca-style recipes popularized the same idea for open models by distilling instruction-following behavior from stronger teacher models.
+
+The original Self-Instruct pipeline is useful because it makes the data contract concrete. It starts from 175 seed tasks, repeatedly samples seed and generated instructions as in-context examples, asks the model for new instructions, classifies whether a task is a classification task, and then generates instances using input-first or output-first templates. The filtering step removes near-duplicate instructions by similarity, malformed generations, overly short or long instructions, and inconsistent input-output pairs. The released run produced roughly 52K instructions and 82K instances after filtering. A reproduction should therefore report the seed set, in-context sampling mix, task-type classifier prompt, instance-generation template, similarity threshold, invalid-generation heuristics, and the final instruction/instance counts.
 
 Synthetic data is attractive because it can cover many formats quickly. It can create paraphrases, edge cases, schema-specific examples, tool traces, or domain-style dialogues long before a human annotation program has reached the same breadth. It is also dangerous because errors scale with the generator. A teacher that fabricates facts, mishandles code, writes insecure SQL, or refuses too aggressively can stamp those mistakes into thousands of training examples. Filtering must therefore test both surface diversity and semantic validity.
 
@@ -93,24 +107,38 @@ Distillation also changes what is being learned. A student can imitate the teach
 
 A practical synthetic-data pipeline usually has four gates. First, generation prompts should specify the task family, difficulty, allowed sources, answer format, and exclusion rules. Second, automatic filters should remove examples that are too short, too similar, malformed, unsupported by evidence, or outside policy. Third, task-specific validators should execute or check outputs when possible: parse JSON, run unit tests, execute SQL against a sandbox database, or compare against a known answer. Fourth, a sampled human audit should estimate residual error rates and update the generator prompts. The goal is not to make synthetic data look diverse; it is to make it add reliable coverage that the current model lacks.
 
+Small curated datasets can be more valuable than broad synthetic volume. Platypus-style tuning used a small Open-Platypus mixture focused on STEM and logic, emphasized human-designed questions, removed exact duplicates and high-similarity instructions, and checked training questions against benchmark questions before LoRA tuning and merging \cite{lee2023platypus}. The lesson is not that every model should become a STEM specialist. It is that SFT data reports should include source-level counts, license and redistribution status, domain filters, duplicate-removal method, benchmark-contamination checks, and whether merged adapters were themselves trained on auditable data.
+
+Language-specific Alpaca variants add another reporting obligation. Chinese Alpaca used Chinese LLaMA as the base, combined millions of instruction examples from translation, public Chinese tasks, Alpaca-style data, and crawled or teacher-generated SFT records, and expanded the Plus versions with more STEM and scientific data \cite{cui2023efficient}. Its template choice is a reminder that ``Alpaca format'' is not a single invariant: the reported setup used the no-input Alpaca prompt template and concatenated instruction and input fields when needed. A multilingual SFT report should therefore state template variants, language proportions, whether data was translated or originally written in the target language, maximum sequence length, dynamic padding behavior, and whether benchmark-like public tasks were excluded.
+
 Synthetic data also changes the ethics and licensing story. A generated answer can still be a derivative of the teacher model's training distribution, a reproduction of memorized text, or an unsafe medical or legal recommendation. The dataset builder must document the teacher model, prompts, filters, and known failure modes. If those details are absent, downstream users cannot interpret the resulting checkpoint.
 
 \section{Training Details}
+\index{label masking}\index{loss mask}\index{SFT hyperparameter}
 \label{sec:sft-training-details}
 
 The training loop for SFT looks simple: tokenize examples, form batches, run the causal model, compute masked cross-entropy, and update parameters. Most failures come from the details around that loop.
 
 First, label masks should align with message boundaries. In a single-turn example, user tokens normally condition the answer but do not contribute to the loss. In a multi-turn example, previous assistant turns may be treated either as context only or as additional target spans. Both choices are defensible, but they train different behavior. If previous assistant turns are targets, the model receives more supervised tokens per dialogue; if they are context only, the objective focuses on the final answer. The choice should be recorded.
 
-Second, sequence packing improves accelerator utilization but can silently corrupt examples. Packing concatenates multiple short conversations into one fixed-length sequence. The attention mask and position handling must prevent a response in one packed example from attending to the user request in the next example unless the packing format deliberately inserts a boundary that the model can learn to ignore. If the implementation uses ordinary causal attention across packed examples, it may train on artificial cross-example context.
+Second, the model must be supervised to stop. If the assistant span does not include an end-of-turn or EOS target, or if the label mask accidentally ignores that token, the model can learn fluent answers without learning a boundary. The deployment symptom is ``infinite'' generation until the server hits \texttt{max\_new\_tokens}. Stop behavior should be tested with the same chat template, special tokens, and stop sequences used in serving.
 
-Third, length control is part of the objective. Truncating from the right may remove the target answer; truncating from the left may remove the instruction; truncating retrieved evidence may make a correct answer appear unsupported. A robust preprocessing job reports the fraction of examples truncated, the number of target tokens lost, the distribution of prompt and answer lengths, and the examples most affected.
+Third, sequence packing improves accelerator utilization but can silently corrupt examples. Packing concatenates multiple short conversations into one fixed-length sequence. The attention mask and position handling must prevent a response in one packed example from attending to the user request in the next example unless the packing format deliberately inserts a boundary that the model can learn to ignore. If the implementation uses ordinary causal attention across packed examples, it may train on artificial cross-example context.
 
-Fourth, batch composition affects the gradient. A mixture with many long coding answers may dominate token-weighted loss even if those examples are a minority by count. Conversely, many short classification examples may dominate example-weighted sampling while contributing few target tokens. A useful run log reports both example counts and target-token counts by data source.
+Completion-only SFT collators make this even more concrete. A common implementation searches the tokenized sample for a response delimiter such as \texttt{\#\#\#Answer:} and masks everything before it. That is correct only if the delimiter token ids are tested with the exact tokenizer, leading newline, spacing, and special-token settings used in preprocessing. If a packed dataset path and a completion-only collator path coexist, the run report should say which one was used: packing improves utilization, while delimiter-based masking gives cleaner assistant-only supervision, and combining the two requires explicit boundary tests.
 
-The optimizer settings are usually less exotic than pretraining but still important. SFT often uses a lower learning rate than training from scratch, short warmup, weight decay on non-norm parameters, gradient clipping, and early stopping by held-out loss or task metrics. Parameter-efficient variants, especially LoRA and QLoRA, are common when full fine-tuning is too expensive; Chapter~\ref{ch:parameter-efficient-adaptation} studies their tradeoffs. Full fine-tuning can alter the model more deeply, but it also stores a full adapted checkpoint and increases the risk of catastrophic forgetting when the SFT set is narrow.
+Hand-built chat templates expose the same problem. If a preprocessing script first inserts textual markers such as \texttt{<EOS>} or a custom label-start token and only then calls the tokenizer, the marker may be split, normalized, or ignored instead of becoming the intended single id. A safer educational pattern is to tokenize each role prefix and content span explicitly, concatenate token ids, and build an \texttt{is\_label} vector at the same time. The collator can then convert non-label positions to the ignore index and shift labels according to the framework's convention. A one-example unit test should print the decoded sequence, the special-token ids, the assistant mask, and the final labels; otherwise an SFT run can silently train on the wrong span or omit the EOS target.
+
+Fourth, padding is not a cosmetic choice. Right padding is common during training because it keeps examples in natural order, but batched decoder-only generation often uses left padding so the next-token position aligns with the last non-padding token. Either choice can work if attention masks, position ids, labels, and KV-cache initialization are consistent. A mismatch can appear as wrong continuation positions, bad loss masks, or broken batch inference even when single-example generation looks fine.
+
+Fifth, length control is part of the objective. Truncating from the right may remove the target answer; truncating from the left may remove the instruction; truncating retrieved evidence may make a correct answer appear unsupported. A robust preprocessing job reports the fraction of examples truncated, the number of target tokens lost, the distribution of prompt and answer lengths, and the examples most affected.
+
+Sixth, batch composition affects the gradient. A mixture with many long coding answers may dominate token-weighted loss even if those examples are a minority by count. Conversely, many short classification examples may dominate example-weighted sampling while contributing few target tokens. A useful run log reports both example counts and target-token counts by data source.
+
+The optimizer settings are usually less exotic than pretraining but still important. SFT often uses a lower learning rate than training from scratch, short warmup, weight decay on non-norm parameters, gradient clipping, and early stopping by held-out loss or task metrics. Parameter-efficient variants, especially LoRA and QLoRA, are common when full fine-tuning is too expensive; Chapter~\ref{ch:parameter-efficient-adaptation} studies their tradeoffs. PEFT may need more update steps or more passes over the data than full fine-tuning because the trainable subspace is smaller, so reports should compare target tokens, validation curves, and regression behavior rather than only epoch counts. Full fine-tuning can alter the model more deeply, but it also stores a full adapted checkpoint and increases the risk of catastrophic forgetting when the SFT set is narrow.
 
 \section{Refusal and Safety Data}
+\index{refusal data}\index{safety data}
 \label{sec:sft-refusal-safety}
 
 Instruction tuning can teach refusals, but refusal data must be designed with care. The easy mistake is to train a binary style: answer normal requests, refuse unsafe requests. Real deployments require finer distinctions. A model should refuse requests for wrongdoing, protected private data, or dangerous operational details; it should answer benign nearby requests; it should ask clarifying questions when risk depends on context; and it should avoid turning every refusal into a lecture.
@@ -120,6 +148,7 @@ Safety examples therefore need paired contrastive coverage. For instance, a data
 Refusal data also interacts with domain adaptation. In medicine, law, finance, education, and internal enterprise settings, a helpful response may require caution, uncertainty, and referral rather than a simple answer or refusal. A model trained only on generic safety data can sound polished while giving advice outside its evidence base. Chapter~\ref{ch:domain-language-adaptation} returns to this problem for specialized domains.
 
 \section{Evaluation}
+\index{instruction-following evaluation}\index{MT-Bench}\index{AlpacaEval}
 \label{sec:sft-evaluation}
 
 SFT evaluation should answer three questions: whether the model follows instructions, whether it preserves base capabilities, and whether it behaves safely under distribution shift. A single benchmark score cannot answer all three.
@@ -133,6 +162,7 @@ Safety evaluation must include both direct unsafe requests and benign requests t
 Finally, evaluation data needs quarantine. If public benchmark examples are used during SFT, then later benchmark scores are not evidence of generalization. Even when the exact examples are removed, paraphrases and synthetic variants can leak. The evaluation set should have documented provenance, a creation date, and a contamination check against the training mixture.
 
 \section{Limits of Imitation}
+\index{behavior cloning}\index{distribution shift}
 \label{sec:sft-limits}
 
 SFT is imitation learning. It teaches the model to place probability mass on responses that look like demonstrations. It does not directly teach which of two plausible responses humans prefer, how to trade off helpfulness and safety, whether a retrieved passage is trustworthy, or how to recover after a tool fails. If the demonstrations contain confident hallucinations, the model learns confident hallucinations. If the demonstrations are verbose, the model becomes verbose. If the demonstrations always comply, the model learns compliance even where refusal is appropriate.
@@ -147,6 +177,7 @@ This limitation does not make SFT optional. SFT establishes the interface on whi
 \item[Instruction tuning] Supervised fine-tuning on examples that express tasks as natural-language requests and desired assistant responses.
 \item[Label mask] A binary or ignored-label pattern specifying which positions contribute to the SFT loss.
 \item[Self-instruction] A synthetic-data method in which a model generates new instructions and demonstrations that are filtered and used for fine-tuning.
+\item[Benchmark contamination] Overlap between training examples and evaluation examples that can make apparent instruction-following gains unreliable.
 \item[Refusal data] Demonstrations that teach the model to decline disallowed requests while preserving useful responses to safe neighboring requests.
 \item[Regression set] A held-out evaluation suite used to detect capability loss after adaptation.
 \end{description}
@@ -158,6 +189,7 @@ This limitation does not make SFT optional. SFT establishes the interface on whi
 \item Given a two-turn chat with a system message, two user turns, and two assistant turns, write a serialized template and mark every token span with $m_t=0$ or $m_t=1$ for Equation~\ref{eq:sft-masked-loss}. State whether previous assistant turns are targets or context only.
 \item Build a small audit table for 100 instruction examples. Include task type, language, source, target-token length, refusal category, and whether an automatic validator exists. What distributional gaps are visible?
 \item Design a synthetic-data prompt for generating NL2SQL examples. Specify two automatic filters and one execution-based validator that would reject bad examples before training.
+\item Reproduce the audit plan for a Self-Instruct-style run: list the seed tasks, similarity threshold, invalid-generation rules, and final instruction/instance counts you would report.
 \item A model improves on an instruction-following leaderboard but gets worse at translation and arithmetic. List three plausible causes in the SFT mixture or training loop and one test for each cause.
 \item Create three near-neighbor safety examples: one request that should be refused, one that should be answered, and one that requires clarification. Explain which surface features should not determine the policy decision.
 \item Compare full fine-tuning and LoRA for the same SFT set. Report trainable parameters, checkpoint size, held-out instruction score, and one regression metric from the base model.

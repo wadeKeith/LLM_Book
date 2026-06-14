@@ -3,7 +3,10 @@
 
 \abstract{This chapter derives the \transformer from tensor shapes. It explains attention, masking, residual streams, normalization, feed-forward layers, positional information, and the implementation invariants needed to debug a model from first principles. The goal is not to memorize a diagram, but to understand the contracts that make deep attention stacks trainable and implementable.}
 
+\paragraph{Chapter contract.} The reader should leave this chapter able to trace tensors through a decoder block, state the shape and mask invariant each operation relies on, connect attention and feed-forward math to implementation checks, and diagnose common bugs before interpreting loss curves.
+
 \section{The Tensor Contract}
+\index{tensor shape}\index{batch dimension}\index{sequence length}\index{hidden size}
 \label{sec:transformer-tensor-contract}
 
 A \transformer layer is a map from a sequence of hidden vectors to another sequence of hidden vectors. Let a batch of token ids have shape $B \times T$, where $B$ is batch size and $T$ is sequence length. An embedding table maps ids into vectors of width $d_{\mathrm{model}}$, producing
@@ -12,7 +15,9 @@ A \transformer layer is a map from a sequence of hidden vectors to another seque
 \end{equation}
 Every standard \transformer block preserves this outer shape. Attention mixes information across the $T$ positions, and the feed-forward network transforms each position independently, but the residual stream remains $B \times T \times d_{\mathrm{model}}$ from the first block to the final normalization.
 
-The original \transformer combined self-attention, feed-forward sublayers, residual connections, and layer normalization into an architecture that parallelizes over sequence positions far more effectively than recurrent networks \cite{vaswani2017attention}.\index{Transformer}\index{self-attention}\index{residual stream} Modern language models adjust many details, but they keep the same central invariant: the model maintains a residual stream and repeatedly applies content-dependent mixing followed by tokenwise nonlinear transformation.
+The original \transformer combined self-attention, feed-forward sublayers, residual connections, and layer normalization into an architecture that parallelizes over sequence positions far more effectively than recurrent networks \cite{vaswani2017attention}.\index{Transformer}\index{Transformer!residual stream}\index{self-attention}\index{residual stream} Modern language models adjust many details, but they keep the same central invariant: the model maintains a residual stream and repeatedly applies content-dependent mixing followed by tokenwise nonlinear transformation.
+
+Figure~\ref{fig:transformer-shape-preserving} summarizes this shape-preserving contract before the chapter decomposes its parts.
 
 \begin{figure}[t]
 \centering
@@ -42,11 +47,13 @@ The original \transformer combined self-attention, feed-forward sublayers, resid
 \node[llmnote, below=8mm of mlp, text width=0.70\textwidth] {The outer tensor shape is invariant. Attention changes how positions exchange information; the MLP changes each position's representation; residual paths preserve a stable route for activations and gradients.};
 \end{tikzpicture}
 }
+\Description{Two-stage block diagram showing a residual stream passing through normalization, multi-head attention, residual addition, normalization, tokenwise MLP, and a second residual addition while keeping batch, sequence, and hidden dimensions unchanged.}
 \caption{A shape-preserving view of the \transformer block. The attention sublayer changes which positions can exchange information; the MLP changes each position's representation; residual addition keeps a stable path through depth.}
 \label{fig:transformer-shape-preserving}
 \end{figure}
 
 \section{Embeddings and Position}
+\index{token embedding}\index{position embedding}\index{positional encoding}\index{Transformer!position encoding}
 \label{sec:embeddings-position}
 
 Token embeddings supply content but not order. If two sequences contain the same token ids in a different order, a permutation-invariant attention layer without position information cannot distinguish them. Position must enter the computation somehow. There are three broad choices.
@@ -63,6 +70,7 @@ Position can also enter as an attention bias. ALiBi, for example, adds a head-sp
 Position ids are not always the same as array indices. Packed sequences, left padding, cached decoding, and sliding-window generation can all make the logical position differ from the tensor column. A robust implementation treats position ids as an explicit tensor or constructs them from a well-tested cache update rule.
 
 \section{Scaled Dot-Product Attention}
+\index{query-key-value}\index{attention score}\index{softmax}\index{head dimension}\index{Transformer!attention block}
 \label{sec:scaled-dot-product-attention}
 
 Self-attention creates three projections of the same residual stream:
@@ -72,7 +80,7 @@ Self-attention creates three projections of the same residual stream:
 For a single head with head dimension $d_h$, the attention output is
 \begin{equation}
   \mathrm{Attn}(Q,K,V)
-  = \mathrm{softmax}\left(\frac{QK^{\top}}{\sqrt{d_h}} + M\right)V,
+  = \mathrm{softmax}(\frac{QK^{\top}}{\sqrt{d_h}} + M)V,
   \label{eq:scaled-dot-product-attention}
 \end{equation}
 where $M$ is an additive mask or bias broadcastable to the score matrix. The scale factor $\sqrt{d_h}$ keeps dot products in a numerically useful range as the head dimension grows. Without it, the softmax can become overly sharp early in training, reducing gradient signal.
@@ -93,6 +101,7 @@ The memory footprint of materialized attention weights is $O(BHT^2)$. This quadr
 The softmax in Eq.~\ref{eq:scaled-dot-product-attention} should be computed after subtracting the row maximum, and masked positions should be represented by a sufficiently negative additive value before softmax. In mixed precision, many implementations compute score reductions in a higher precision than the stored activations. A model can appear to have an architecture bug when the real problem is overflow, underflow, or a mask with the wrong dtype.
 
 \section{Masks and Causality}
+\index{causal mask}\index{padding mask}\index{causality}
 \label{sec:masks-causality}
 
 Masks specify which positions may exchange information. A padding mask prevents real tokens from attending to padded tokens. A causal mask prevents position $t$ from attending to positions $>t$. Encoder-decoder cross-attention uses a different pattern: decoder positions attend to all allowed encoder positions, while decoder self-attention remains causal.
@@ -109,7 +118,10 @@ The sign convention matters. An additive mask uses $-\infty$ for disallowed posi
 
 In decoder-only language models, causality is part of the statistical objective. If token $x_t$ can attend to $x_{t+1}$ during training, the model can reduce loss by copying information that will not exist at inference time. This creates a false loss curve and poor generation. Causal masking is therefore not an optional implementation detail; it is the mechanism that makes teacher-forced next-token training match autoregressive decoding.
 
+Teaching encoder-decoder implementations often make the mask convention concrete. A padding mask may be materialized as a Boolean tensor of shape $B \times 1 \times T_q \times T_k$, where allowed query-key pairs are \texttt{True}; a decoder self-attention mask is then the logical product of the padding mask and a lower-triangular no-peek mask. This convention matches code that applies \texttt{masked\_fill} with \texttt{mask == 0} and \texttt{very\_negative} before softmax. It is correct only if every mask uses the same polarity. Cross-attention also has a rectangular $T_{\mathrm{dec}}\times T_{\mathrm{enc}}$ mask, so debugging only square self-attention masks misses an important class of encoder-decoder errors.
+
 \section{Residual Streams and Normalization}
+\index{residual stream}\index{residual connection}\index{layer normalization}\index{pre-normalization}
 \label{sec:residual-streams-normalization}
 
 Deep \transformers are trainable because each block modifies a residual stream rather than replacing it. In a pre-normalized decoder block,
@@ -119,14 +131,16 @@ Deep \transformers are trainable because each block modifies a residual stream r
 \end{align}
 The residual path gives gradients a direct route through depth, while normalization controls the scale of the inputs to attention and MLP sublayers. Post-normalized blocks instead apply normalization after residual addition. Post-norm was used in the original \transformer, but pre-norm variants are often easier to optimize at substantial depth because the sublayer input distribution is more controlled.
 
+A small translation-oriented reference implementation is therefore not automatically a modern decoder recipe. The original-style stack commonly uses sinusoidal absolute positions, ReLU feed-forward layers, dropout after each sublayer, and the order ``sublayer, dropout, residual add, LayerNorm''. That is a valid six-layer encoder-decoder teaching model, but a LLaMA-class decoder usually changes several contracts at once: pre-norm RMSNorm, RoPE, gated MLPs, no encoder cross-attention, KV-cache-aware positions, and often a different initialization and optimizer schedule. When porting code, preserve the tensor tests and mask tests, but do not silently inherit the normalization order or positional mechanism.
+
 Layer normalization centers and rescales a vector using its mean and variance. For hidden vector $h\in\mathbb{R}^{d}$,
 \begin{equation}
-  \mathrm{LayerNorm}(h)_i =
+  {\mathrm{LayerNorm}(h)}_i =
   \gamma_i \frac{h_i-\mu}{\sqrt{\sigma^2+\epsilon}} + \beta_i.
 \end{equation}
 RMSNorm removes the mean-centering step and rescales by the root mean square \cite{zhang2019root}:
 \begin{equation}
-  \mathrm{RMSNorm}(h)_i =
+  {\mathrm{RMSNorm}(h)}_i =
   g_i \frac{h_i}{\sqrt{\frac{1}{d}\sum_{j=1}^{d}h_j^2+\epsilon}}.
 \end{equation}
 The difference is small in notation but significant in implementation: RMSNorm uses fewer reductions and has become a common default in LLaMA-class decoders.
@@ -134,6 +148,7 @@ The difference is small in notation but significant in implementation: RMSNorm u
 Normalization does not make scale irrelevant. Residual branches, initialization, optimizer settings, activation functions, and precision still determine whether activations remain in a useful range. A useful debugging habit is to log activation norms per layer during early training. Sudden layer-local norm explosions often reveal a mask, initialization, learning-rate, or mixed-precision error before the loss becomes unrecoverable.
 
 \section{Feed-Forward Blocks}
+\index{feed-forward network}\index{MLP}\index{activation function}
 \label{sec:feed-forward-blocks}
 
 The feed-forward sublayer is positionwise: it applies the same MLP to each token independently. The original \transformer uses a two-layer network with a larger hidden width:
@@ -145,11 +160,12 @@ The expansion width is often around $4d_{\mathrm{model}}$ in GPT-style blocks. T
 Gated variants split the hidden projection into a value branch and a gate branch. A SwiGLU-style layer can be written
 \begin{equation}
   \mathrm{SwiGLU}(h) =
-  W_o\left(\mathrm{SiLU}(W_g h) \odot W_u h\right),
+  W_o(\mathrm{SiLU}(W_g h) \odot W_u h),
 \end{equation}
 where $\odot$ denotes elementwise multiplication. GLU variants have been found effective in \transformer feed-forward sublayers \cite{shazeer2020glu}. Modern implementations often shrink the intermediate width relative to the simple $4d$ MLP so the parameter count remains comparable after adding the gate projection.
 
 \section{Debugging Invariants}
+\index{debugging invariant}\index{numerical stability}\index{gradient check}
 \label{sec:debugging-invariants}
 
 Most \transformer bugs are shape bugs, mask bugs, or convention bugs. Table~\ref{tab:transformer-debugging-invariants} lists invariants that should hold before training at scale. These checks are cheap compared with a wasted run.
@@ -159,32 +175,35 @@ Most \transformer bugs are shape bugs, mask bugs, or convention bugs. Table~\ref
 \label{tab:transformer-debugging-invariants}
 \small
 \begin{tabular}{@{}p{3.0cm}p{4.5cm}p{4.4cm}@{}}
-\hline\noalign{\smallskip}
+\toprule
 Check & Expected Property & Symptom When Broken \\
-\noalign{\smallskip}\svhline\noalign{\smallskip}
+\midrule
 Residual shape & Every block returns $B \times T \times d_{\mathrm{model}}$ & Later projection shape errors or silent broadcasting \\
 Head split & $d_{\mathrm{model}}$ divisible by number of heads & Incorrect reshape or mixed head dimensions \\
 Causal mask & Token $t$ attends only to positions $\leq t$ & Unrealistically low train loss and bad generation \\
 Padding labels & Padding does not contribute to loss & Model learns to emit padding or loss depends on batch padding \\
 Position ids & Cached and uncached paths use the same logical positions & Prefill works but token-by-token decoding drifts \\
 Softmax rows & Every unmasked query has at least one allowed key & \texttt{nan} probabilities after masking \\
-\noalign{\smallskip}\hline
+\bottomrule
 \end{tabular}
 \end{table}
 
 Attention weights are useful diagnostics but weak explanations. A head that attends to a token does not prove that the token caused the output, because later layers, value projections, residual paths, and MLPs can transform or erase that information. Evaluation of a \transformer should therefore combine mechanistic inspection with controlled interventions, held-out loss, downstream tasks, and generation behavior.
 
 \section{From Diagram to Tests}
+\index{unit test}\index{shape test}\index{implementation fidelity}
 \label{sec:transformer-diagram-to-tests}
 
 The block diagram becomes useful only when it is turned into tests. A high-quality implementation should compare prefill and incremental decoding on the same prefix, assert that logits are invariant under harmless padding, and verify that a single-token continuation uses the same RoPE position as the corresponding full-context computation. Let $f_{\theta}^{\mathrm{full}}(x_{1:T})$ be logits from a full forward pass and $f_{\theta}^{\mathrm{cache}}(x_{1:T})$ be logits from cached token-by-token decoding. Before numerical tolerances from fused kernels are considered, a decoder implementation should satisfy
 \begin{equation}
   \max_{t\leq T}\,
-  \left\|f_{\theta}^{\mathrm{full}}(x_{1:t}) -
-  f_{\theta}^{\mathrm{cache}}(x_{1:t})\right\|_{\infty}
+  \lVert f_{\theta}^{\mathrm{full}}(x_{1:t}) -
+  f_{\theta}^{\mathrm{cache}}(x_{1:t}) \rVert_{\infty}
   \approx 0.
 \end{equation}
 When this check fails, the cause is often not attention theory but a position-id, mask, dtype, or cache-layout mismatch. This is why the book emphasizes tensor contracts before architectural folklore.
+
+The training loop has an equally sharp contract. In teacher forcing, the decoder input is the target prefix without its final token, while labels are the same sequence shifted left by one position. The loss mask must ignore target padding, not merely whichever padding id happened to be convenient in the source vocabulary. If source and target tokenizers share the same \texttt{<pad>} id in a toy experiment, the bug can stay hidden until the implementation is moved to separate vocabularies, multilingual tokenizers, or chat templates.
 
 \section{Key Terms}
 \label{sec:chapter-three-key-terms}

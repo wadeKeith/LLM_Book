@@ -37,9 +37,11 @@ The main missing layer was not another foundational chapter but a synthesis chap
 - Added references for CS336, Qwen3-VL, Qwen3-Omni, Kimi/WebGPT support, test-time scaling surveys, RL-for-LLMs survey, next-generation inference simulation, Janus-Pro, MMaDA, Dream 7B, DiT, Sora, rectified-flow transformers, MammothModa2, AR-Omni, RT-2, OpenVLA, VLA surveys, VBench++, T2VPhysBench, TOC-Bench, NIST synthetic-content transparency, and C2PA.
 - Updated `book_zh.tex` so the Chinese version is framed as a readable translation of the English edition, not a core-argument summary, and synchronized the new coverage.
 - Added `.DS_Store` to `.gitignore`.
+- Expanded the English body index across all 17 chapters so the final `\printindex` covers core concepts beyond glossary entries.
+- Added `make frontier-coverage-check` so the documented frontier layer is now a release gate for both manuscripts. The latest run checks 24 required frontier bibliography keys, 24/24 English frontier citation hits, 24/24 Chinese frontier citation hits, 29/29 English frontier topic markers, and 21/21 Chinese frontier topic markers.
 
 ## Remaining Non-Blocking Work
 
 - The English manuscript is the controlling publication draft.
-- The Chinese manuscript follows the English chapter structure and has been moved toward a readable translated edition. It should continue to be expanded paragraph-for-paragraph if a full print-length bilingual release is required.
-- The index remains light and should be expanded if the project moves from public draft to formal press-style release.
+- The Chinese manuscript follows the English chapter structure and has been moved toward a readable translated edition. `make bilingual-coverage-check` now quantifies substantive chapter coverage, while `make bilingual-print-plan` and `make bilingual-alignment-check` track the active paragraph-for-paragraph bilingual print objective.
+- The English index now has source and rendered gates for high-value reader aliases, capitalization, component punctuation, required canonical topic paths, and required parent-subentry grouping. A publisher-requested professional indexer could still review topic wording, but the current technical draft no longer carries an open index P2.

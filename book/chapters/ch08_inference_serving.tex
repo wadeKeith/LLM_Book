@@ -1,22 +1,29 @@
 \chapter{Inference and Serving}
 \label{ch:inference-serving}
 
-\abstract{This chapter studies \llm inference as a systems problem. It separates prefill from decode, derives KV-cache memory costs, explains batching and paged attention, compares quantization and speculative decoding, and gives practical guidance for streaming APIs, cancellation, load testing, cost accounting, and evaluation under real traffic.}
+\abstract{This chapter studies \llm inference as a systems problem. It separates prefill from decode, derives KV-cache memory costs, explains batching, paged attention, chunked prefill, and prefill-decode disaggregation, compares quantization and speculative decoding, and gives practical guidance for streaming APIs, cancellation, load testing, cost accounting, and evaluation under real traffic.}
+
+\paragraph{Chapter contract.} The reader should leave this chapter able to explain why deployment is not just evaluation mode, estimate prefill and decode costs, reason about KV-cache residency and scheduling, and design measurements that expose latency, throughput, cost, and safety behavior under real traffic.
 
 \section{Serving Is Not Evaluation Mode}
+\index{inference serving}\index{online inference}\index{service-level objective}
 \label{sec:serving-not-eval-mode}
 
-Inference is often introduced as ``run the trained model with dropout disabled.'' That description is correct for a single forward pass and inadequate for a user-facing service. An \llm service must accept variable-length prompts, schedule many concurrent requests, manage KV-cache memory, stream tokens, cancel work when clients disconnect, enforce timeouts, protect shared capacity, and report cost. The same model can feel fast or unusable depending on the serving stack.
+Inference is often introduced as ``run the trained model with dropout disabled.'' That description is correct for a single forward pass and inadequate for a user-facing service. A \llm service must accept variable-length prompts, schedule many concurrent requests, manage KV-cache memory, stream tokens, cancel work when clients disconnect, enforce timeouts, protect shared capacity, and report cost. The same model can feel fast or unusable depending on the serving stack.
 
 Autoregressive generation is the reason. A prompt of length $T_p$ is processed once, but a completion of length $T_g$ is generated one token at a time:
 \begin{equation}
-  p_{\theta}(y_{1:T_g}\mid x_{1:T_p})
-  =
-  \prod_{t=1}^{T_g}p_{\theta}(y_t \mid x_{1:T_p}, y_{<t}).
+  \begin{aligned}
+  p_{\theta}(y_{1:T_g}\mid x_{1:T_p}) ={}&
+  p_{\theta}(y_1\mid x_{1:T_p})\,
+  p_{\theta}(y_2\mid x_{1:T_p}, y_1)\,\cdots \\
+  &{}\times p_{\theta}(y_{T_g}\mid x_{1:T_p}, y_{<T_g}).
+  \end{aligned}
 \end{equation}
 Each generated token depends on all previous tokens, so decode has a serial dependency even when each individual forward pass uses parallel hardware. Serving systems therefore optimize two different phases: prefill, which processes the prompt, and decode, which extends the sequence.
 
 \section{Prefill and Decode}
+\index{prefill}\index{decode}\index{inference serving!prefill}\index{inference serving!decode}\index{time-to-first-token}\index{inter-token latency}
 \label{sec:prefill-decode}
 
 Prefill computes hidden states for the prompt and writes keys and values for every layer into the KV cache. It resembles training inference over a full sequence: matrix multiplications are large, attention can be compute-heavy, and the system benefits from efficient attention kernels such as FlashAttention \cite{dao2022flashattention}. For long prompts, prefill latency can dominate time to first token. Prompt caching and prefix reuse can help when many requests share the same system prompt, retrieved context, or conversation prefix, but the cache must be keyed by exact tokens and model state.
@@ -34,6 +41,7 @@ The distinction explains a common measurement error. Reporting only generated to
 These metrics move differently under load. A scheduler can improve output throughput by batching decode requests while increasing time to first token for short prompts.
 
 \section{The KV Cache}
+\index{KV cache}\index{KV cache!memory accounting}\index{cache memory}
 \label{sec:kv-cache}
 
 The KV cache stores attention keys and values for previously processed tokens. For a dense decoder with $L$ layers, $H_{\mathrm{kv}}$ key/value heads, head dimension $d_h$, sequence length $T$, batch size $B$, and $s$ bytes per cache element, the approximate cache memory is
@@ -49,16 +57,30 @@ KV memory grows with active sequence length, not just model size. A smaller mode
 Cache precision is a systems choice. BF16 or FP16 caches preserve accuracy but consume memory. Quantized KV caches can increase batch capacity and long-context affordability, but they may affect perplexity, retrieval sensitivity, or exact copying. Any KV-cache quantization should be evaluated on tasks that depend on long-range information, not only on short generic benchmarks.
 
 \section{Batching and Scheduling}
+\index{continuous batching}\index{inference serving!continuous batching}\index{scheduler}\index{queueing}
 \label{sec:batching-scheduling}
 
 Batching improves hardware utilization by combining requests. In prefill, batching prompts of similar length avoids padding waste. In decode, batching many active sequences lets the service perform one larger step instead of many tiny steps. The complication is that requests arrive and finish at different times. Static batching waits to form a batch and then runs it to completion; this wastes capacity when sequences have different output lengths. Continuous batching admits new requests as old ones finish, keeping the decode batch full.
 
 Continuous batching turns serving into a scheduling problem. Each request has prompt length, generated length so far, maximum token budget, priority, deadline, and memory footprint. The scheduler chooses which requests enter prefill, which active sequences decode next, and when to evict or pause work. Policies often balance throughput against latency. A throughput-optimized policy may batch aggressively and hurt short interactive requests. A latency-optimized policy may keep batches small and waste hardware.
 
+Toy continuous-batching implementations are useful because they expose the state that production systems must make explicit. A request manager tracks an id, prompt tokens, generated tokens, current length, maximum length, and a waiting/running/completed state; a KV-cache manager tracks fixed or paged slots, per-slot sequence lengths, a request-to-slot map, a slot-to-request map, and the free-slot set. The prefill path allocates slots, pads prompts only for the model batch, writes the prompt KV entries, and returns logits for the first generated token. The decode path feeds only the last generated token for each active slot together with its current position, writes one KV entry per layer, updates length, tests EOS or length stop conditions, and frees the slot immediately when the request finishes. This is the operational meaning of continuous batching; without these state transitions, the phrase hides the hard part.
+
+Several details that are harmless in a notebook become service contracts. Request queues must be thread-safe if producers and the inference loop run concurrently. Maximum batch size and maximum sequence length should be derived from a memory budget, not chosen independently. A fixed tensor cache of shape layers by batch by sequence by heads by head dimension is easy to teach, but it over-reserves memory for short requests and fragments capacity for mixed traffic; a paged cache changes the allocation granularity but still needs the same request-state bookkeeping. If a decode step finishes a request, the service must remove it from the active batch before the next step and must make the cache slot reusable without exposing stale tokens across tenants.
+
 PagedAttention, introduced in vLLM, addresses memory management by storing KV cache in fixed-size blocks rather than requiring each sequence to occupy a contiguous allocation \cite{kwon2023efficient}. The analogy to virtual memory is useful: logical token positions map to physical cache blocks, and blocks can be shared, allocated, or freed as sequences grow and finish. This reduces fragmentation and makes continuous batching more effective. It does not remove the KV-cache cost; it makes the cost manageable under variable-length traffic.
+
+Recent serving stacks also separate scheduling by phase. Prefill is usually compute-heavy and benefits from large prompt batches; decode is often memory-bandwidth-bound and benefits from keeping many active sequences resident. Chunked prefill splits a long prompt into smaller pieces so it does not monopolize the accelerator while short decode steps wait. Prefill-decode disaggregation goes further by placing prefill and decode on different workers or hardware pools, then transferring the resulting KV state or a system-specific representation between them \cite{feng2025frontier}. This can improve mixed-traffic latency, but it adds routing, cache-transfer, admission-control, and failure-recovery contracts.
+
+The phase goals should be written explicitly in a production design. A prefill pool is optimized for input tokens per second, prompt-batch utilization, and time to first token; a decode pool is optimized for output tokens per second, inter-token latency, KV-cache residency, and memory bandwidth. The handoff between them is a first-class path: it must preserve the exact token prefix and positional state, account for KV transfer time, and expose backpressure when decode workers cannot accept more resident sequences. For a DeepSeek-V3-like MoE service, the report should also say whether MLA-style cache compression, expert parallel routing, FP8 or other inference precision, and MTP heads are actually active at serving time rather than only appearing in the training recipe \cite{deepseek2024v3}.
+
+MoE serving adds another layer to the same scheduler. Expert routing can create all-to-all communication during inference, and the preferred placement for experts may differ from the placement for attention or dense FFN work. A service report for a sparse model should therefore separate prefill throughput, decode throughput, expert token counts, all-to-all time, cache movement, and tail latency. Otherwise an apparent batching improvement may simply hide expert-routing congestion.
+
+Figure~\ref{fig:inference-serving-loop} shows the serving loop as a resource-control system around prefill, decode, cache blocks, filters, and streaming.
 
 \begin{figure}[t]
 \centering
+\resizebox{\textwidth}{!}{%
 \begin{tikzpicture}[node distance=7mm and 5mm]
 \node[llmblock, text width=2.3cm] (req) {Incoming\\requests};
 \node[llmblock, right=of req, text width=2.2cm] (adm) {Admission\\control};
@@ -77,29 +99,34 @@ PagedAttention, introduced in vLLM, addresses memory management by storing KV ca
 \draw[llmdash] (filters.west) -- ++(-1.1,0) node[left, font=\scriptsize] {return, retry, or block};
 \node[llmnote, below=8mm of kv, text width=0.78\textwidth] {The scheduler mediates compute and memory. Long prompts pressure prefill; long outputs pressure decode and KV blocks; filters and validators add latency that must be load-tested with the model rather than appended after the fact.};
 \end{tikzpicture}
+}%
+\Description{Serving-loop diagram showing incoming requests, admission control, prefill queue, decode batch, streaming and stop handling, paged KV blocks, safety validators, and return or retry decisions.}
 \caption{An inference service as a resource-control system. The PagedAttention idea from vLLM motivates the KV-block abstraction, but the figure is an original synthesis of the full serving loop \cite{kwon2023efficient}.}
 \label{fig:inference-serving-loop}
 \end{figure}
+
+Table~\ref{tab:serving-bottlenecks} makes the traffic-shape dependence explicit.
 
 \begin{table}[t]
 \caption{Serving bottlenecks differ across request shapes.}
 \label{tab:serving-bottlenecks}
 \small
 \begin{tabular}{@{}p{3.1cm}p{3.8cm}p{4.5cm}@{}}
-\hline\noalign{\smallskip}
+\toprule
 Traffic Pattern & Likely Bottleneck & Useful Metric \\
-\noalign{\smallskip}\svhline\noalign{\smallskip}
+\midrule
 Short prompts, short outputs & Queueing and launch overhead & Requests/s, p95 end-to-end latency \\
 Long prompts, short outputs & Prefill compute and attention memory & Time to first token, input tokens/s \\
 Short prompts, long outputs & Decode bandwidth and batch occupancy & Inter-token latency, output tokens/s \\
 Long conversations & KV-cache capacity & Active tokens, cache hit/eviction rates \\
 Shared system prompts & Prefix-cache management & Cache hit rate, first-token latency by prefix \\
 Mixed priorities & Scheduler policy & Latency by class, deadline miss rate \\
-\noalign{\smallskip}\hline
+\bottomrule
 \end{tabular}
 \end{table}
 
 \section{Memory Management and Admission Control}
+\index{paged attention}\index{KV cache!paged attention}\index{admission control}\index{memory fragmentation}
 \label{sec:serving-memory-admission}
 
 An inference server needs an admission policy. If it accepts more active tokens than the hardware can support, it will either run out of memory or degrade latency for every request. A simple policy estimates each request's maximum cache reservation from prompt length plus maximum new tokens. A more flexible policy admits based on expected length and enforces a hard cap during generation. The latter improves utilization but needs cancellation and partial-progress handling when a request exceeds budget.
@@ -109,6 +136,7 @@ Memory fragmentation is not a theoretical concern. Without paging or careful poo
 Eviction policy depends on product semantics. For stateless completion APIs, the cache can be freed when the response ends. For chat sessions, a server may keep conversation prefixes warm for a short time. For retrieval systems, retrieved documents may change between turns, so prefix reuse must respect the exact token sequence and tool outputs. For privacy-sensitive deployments, cache lifetime and tenant isolation are security concerns as well as performance concerns.
 
 \section{Quantization and Compression}
+\index{inference quantization}\index{quantization!inference}\index{weight-only quantization}\index{KV cache!quantization}
 \label{sec:serving-quantization}
 
 Inference cost is often dominated by memory bandwidth and capacity. Quantization reduces the bytes moved for weights, activations, or KV cache. Weight-only quantization stores weights in low precision while computing with higher-precision activations. This can reduce model memory and improve decode throughput, especially when batch sizes are small and weight loading dominates. GPTQ and AWQ are influential post-training approaches for low-bit LLM weight quantization \cite{frantar2022gptq,lin2023awq}. SmoothQuant targets weight-and-activation INT8 quantization by moving quantization difficulty from activations to weights through offline scaling \cite{xiao2023smoothquant}.
@@ -118,6 +146,7 @@ Quantization is not a single knob. Important choices include bit width, per-tens
 Evaluation should include both quality and systems metrics. Quality metrics include held-out perplexity, task accuracy, exact-match behavior for copying, code execution, long-context retrieval, and safety probes. Systems metrics include model load time, peak memory, time to first token, decode tokens per second, batch capacity, and cost per million tokens. Quantization can improve one metric while hurting another; a publishable claim states the traffic shape and hardware.
 
 \section{Speculative and Parallel Decoding}
+\index{speculative decoding}\index{decoding!speculative}\index{draft model}\index{verification}
 \label{sec:speculative-decoding}
 
 The serial dependency of autoregressive decoding makes acceleration difficult. Speculative decoding uses a smaller or cheaper draft model to propose several tokens, then verifies those tokens with the target model in a more parallel computation. The exact algorithm can preserve the target model's output distribution while reducing latency when the draft model is accurate enough and cheap enough \cite{leviathan2023fast}. The speedup is not automatic: if draft tokens are frequently rejected, the service pays for both draft and target work.
@@ -126,16 +155,74 @@ Speculative decoding introduces new serving decisions. The draft model must be d
 
 Other parallel decoding methods add auxiliary heads or predict multiple future tokens directly. These approaches can reduce the number of target passes but may require model modification or extra training. They should be evaluated under the same rule as speculative decoding: measure quality-preserving speedup on the actual request distribution, including queueing and memory pressure.
 
+Multi-token prediction needs careful terminology. In a pretraining report, an MTP head may be an auxiliary loss that improves shared representations and is removed after training, as in the DeepSeek-V3 recipe \cite{deepseek2024v3}. In a serving system, a multi-token head or draft path must remain available at inference time and must preserve output quality under the decoding policy. These are different claims. A service report should state whether future-token prediction affects the released checkpoint, the runtime decoder, or both.
+
+The implementation also determines what ``multi-token'' means. A simple auxiliary head can directly predict token $t+i$ from the current hidden state, but a DeepSeek-V3-style MTP module is closer to a recurrent next-token-prediction stack: later auxiliary modules consume shifted embeddings and latent features, share parts of the embedding or language-head path, and train with next-token losses at shifted positions. During inference, any retained MTP path must still manage its own cache, acceptance rule, and rollback behavior. Calling both designs MTP is acceptable only if the report distinguishes training loss, checkpoint structure, and runtime decoding algorithm.
+
 \section{Attention Kernels and Long Context}
+\index{FlashAttention}\index{attention!FlashAttention}\index{attention kernel}\index{long-context serving}\index{attention!long context}
 \label{sec:attention-kernels-long-context}
 
-Attention kernels matter in prefill and long-context serving. Standard attention materializes or implicitly handles an attention matrix whose logical size grows with $T^2$. FlashAttention improves memory efficiency by tiling computation and avoiding unnecessary reads and writes to high-bandwidth memory while computing exact attention \cite{dao2022flashattention}. This is especially important for long prompts, training, and batched prefill. During single-token decode, the attention pattern is a query attending to cached keys and values, so the bottleneck often shifts toward cache bandwidth and layout.
+Attention kernels matter in prefill and long-context serving. Standard attention materializes or implicitly handles an attention matrix whose logical size grows with $T^2$. FlashAttention improves memory efficiency by tiling computation and avoiding unnecessary reads and writes to high-bandwidth memory while computing exact attention \cite{dao2022flashattention}. The key invariant is online softmax: as a query streams over key/value blocks, the kernel maintains a running row maximum and normalizer, rescales partial outputs when a later block changes the maximum, and therefore avoids materializing the full score matrix without changing the mathematical attention result. This is especially important for long prompts, training, and batched prefill. During single-token decode, the attention pattern is a query attending to cached keys and values, so the bottleneck often shifts toward cache bandwidth and layout.
+
+The acceleration methods in modern serving stacks are best grouped by what bottleneck they attack. Architectural changes such as MQA and GQA reduce KV heads and therefore decode bandwidth. Kernel changes such as FlashAttention-2 improve tiling, work partitioning, and occupancy for prefill and training-like attention \cite{dao2023flashattention2}. Cache-management systems such as PagedAttention reduce fragmentation rather than changing model math. Long-context variants such as sliding-window attention, StreamingLLM attention sinks, and LongLoRA's shifted sparse attention change which tokens participate in training or serving computation \cite{xiao2023streamingllm,chen2023longlora}. Decode accelerators such as speculative decoding, Medusa, and Lookahead decoding try to reduce the number of serial target-model steps \cite{leviathan2023fast,cai2024medusa,fu2024lookahead}. These methods compose only when their contracts match: a long-context attention trick can help prefill while doing little for decode; a multi-head decoder can reduce target passes while increasing checkpoint and routing complexity.
+
+Table~\ref{tab:serving-acceleration-taxonomy} groups these methods by the bottleneck they primarily attack.
+
+\begin{table}[t]
+\caption{A serving-oriented taxonomy of attention and decoding accelerators.}
+\label{tab:serving-acceleration-taxonomy}
+\small
+\begin{tabular}{@{}p{2.2cm}p{2.6cm}p{2.9cm}p{2.8cm}@{}}
+\toprule
+Family & Examples & Primary bottleneck & Contract to report \\
+\midrule
+KV-head reduction & MQA, GQA & Decode cache size and bandwidth & KV heads, cache bytes/token, quality change \\
+Kernel and tiling & FlashAttention, FlashAttention-2 & Prefill and long-sequence attention I/O & Exactness, dtype, hardware, sequence lengths \\
+Cache management & PagedAttention & Fragmentation and continuous batching & Block size, eviction, sharing, cancellation \\
+Windowed or sink attention & Sliding window, StreamingLLM, LongLoRA & Long-context memory and training cost & Which tokens remain visible, whether inference uses full attention \\
+Parallel decoding & Speculative decoding, Medusa, Lookahead & Serial target-model steps & Acceptance rate, extra heads or draft model, quality preservation \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Figure~\ref{fig:serving-accelerator-map} turns the same taxonomy into a serving design map: a useful accelerator is one whose contract matches the dominant bottleneck in the current traffic mix.
+
+\begin{figure}[t]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[node distance=0.65cm and 0.8cm]
+\node[llmblock, text width=2.45cm] (traffic) {traffic shape\\prompt/output mix};
+\node[llmblock, right=of traffic, text width=2.55cm] (prefill) {prefill\\attention I/O};
+\node[llmblock, right=of prefill, text width=2.55cm] (decode) {decode\\serial steps};
+\node[llmblock, right=of decode, text width=2.55cm] (cache) {KV state\\blocks and bandwidth};
+\node[llmblock, right=of cache, text width=2.55cm] (gate) {release gate\\quality and cost};
+
+\node[llmnote, below=0.7cm of prefill, text width=2.7cm] (kernel) {kernel/tiling\\FlashAttention};
+\node[llmnote, below=0.7cm of decode, text width=2.7cm] (parallel) {parallel decode\\speculation, Medusa};
+\node[llmnote, below=0.7cm of cache, text width=2.7cm] (paged) {cache management\\PagedAttention};
+
+\draw[llmarrow] (traffic) -- (prefill);
+\draw[llmarrow] (prefill) -- (decode);
+\draw[llmarrow] (decode) -- (cache);
+\draw[llmarrow] (cache) -- (gate);
+\draw[llmdash] (prefill) -- (kernel);
+\draw[llmdash] (decode) -- (parallel);
+\draw[llmdash] (cache) -- (paged);
+\draw[llmdash] (gate.north) .. controls +(0,1.0cm) and +(0,1.0cm) .. node[above, font=\scriptsize] {measure TTFT, TPOT, memory, acceptance, regressions} (traffic.north);
+\end{tikzpicture}
+}
+\Description{A left-to-right map connects traffic shape to prefill, decode, KV state, and release gates, with supporting notes for kernels, parallel decoding, and cache management.}
+\caption{A serving accelerator should be chosen by bottleneck, not by name recognition. The map synthesizes kernel, cache-management, and parallel-decoding contracts from FlashAttention, PagedAttention/vLLM, speculative decoding, Medusa, and Lookahead decoding \cite{dao2022flashattention,kwon2023efficient,leviathan2023fast,cai2024medusa,fu2024lookahead}.}
+\label{fig:serving-accelerator-map}
+\end{figure}
 
 Long context should be evaluated with length-aware tests. A model can accept a long prompt syntactically yet fail to use evidence in the middle. A serving stack can support a maximum context in isolation yet collapse under many concurrent long-context requests. A benchmark that reports only accuracy at maximum length omits the cost curve. For production planning, the relevant graph plots latency, throughput, memory, and accuracy as functions of input length and active batch size.
 
 Chunked prefill is a practical technique for long prompts. Instead of monopolizing the device with one long prefill, the server splits prompt processing into chunks and interleaves other work. This can reduce tail latency for mixed traffic, but it complicates scheduling and may reduce raw throughput. Prefix caching, retrieval caching, and chunked prefill should be measured together because they interact.
 
 \section{Streaming APIs, Cancellation, and Safety Filters}
+\index{streaming API}\index{cancellation}\index{safety filter}
 \label{sec:streaming-cancellation}
 
 Streaming changes user experience and server behavior. A streamed response can show the first token quickly while the full answer is still decoding. The server must flush partial text, handle token-to-text boundaries, and decide when to emit tool-call or structured-output fragments. It must also handle cancellation. If a client disconnects, continuing to decode wastes capacity and may hold KV-cache blocks that other requests need.
@@ -145,6 +232,7 @@ Timeout policy should distinguish queue timeout, prefill timeout, decode timeout
 Safety filters and output validators add latency. Some systems filter prompts before prefill, monitor generated tokens during streaming, and run final classifiers after completion. Tool-using systems may validate JSON schemas or execute sandboxed checks. These components should be in the latency budget and load test, not treated as free post-processing. If a safety classifier uses the same GPU pool as generation, it competes for capacity.
 
 \section{Load Testing and Cost Accounting}
+\index{load testing}\index{inference serving!load testing}\index{tail latency}\index{cost accounting}
 \label{sec:load-testing-cost}
 
 A load test should model traffic, not merely saturate a server with identical prompts. Real traffic has distributions over prompt length, output length, decoding parameters, tenant priority, cache reuse, and cancellation. Synthetic tests are still useful, but they should state the distribution. A minimal load-test report includes average, p50, p90, p95, and p99 latency; time to first token; inter-token latency; input and output tokens per second; requests per second; error rate; cancellation rate; GPU memory; GPU utilization; and cost per million input and output tokens.
@@ -152,25 +240,26 @@ A load test should model traffic, not merely saturate a server with identical pr
 Cost per token is not constant. Long prompts spend more prefill compute. Long outputs spend more serial decode time and KV memory. Small batches may waste hardware. Very large batches may improve throughput while hurting latency. Quantization can reduce cost if kernels are efficient. Speculative decoding can reduce cost only if the draft overhead is smaller than the target passes it avoids. A pricing or capacity model should therefore separate input-token and output-token economics.
 
 \begin{table}[t]
-\caption{A compact load-test table for an \llm service.}
+\caption{A compact load-test table for a \llm service.}
 \label{tab:load-test-template}
 \small
 \begin{tabular}{@{}p{2.4cm}p{2.2cm}p{2.2cm}p{2.2cm}p{2.2cm}@{}}
-\hline\noalign{\smallskip}
+\toprule
 Scenario & TTFT p95 & E2E p95 & Output toks/s & Cost / 1M toks \\
-\noalign{\smallskip}\svhline\noalign{\smallskip}
+\midrule
 Short chat & & & & \\
 Long prompt QA & & & & \\
 Code generation & & & & \\
 RAG with shared prefix & & & & \\
 Mixed production trace & & & & \\
-\noalign{\smallskip}\hline
+\bottomrule
 \end{tabular}
 \end{table}
 
 Tail latency deserves special attention. Users experience the slow request, not the mean. Tail latency can come from queueing, long prompts, cache fragmentation, straggler kernels, network backpressure, safety filters, or retries. Averages hide all of these. A good load test captures traces for the slowest requests and attributes time to queue, prefill, decode, post-processing, and streaming flush.
 
 \section{Worked Capacity Example}
+\index{capacity planning}\index{inference serving!capacity planning}\index{serving capacity}
 \label{sec:serving-worked-capacity-example}
 
 Consider a 32-layer model with $H_{\mathrm{kv}}=8$, $d_h=128$, BF16 cache elements, and an active cache budget of 40 GiB after weights and runtime buffers. Each token in one sequence consumes approximately
@@ -181,14 +270,17 @@ Consider a 32-layer model with $H_{\mathrm{kv}}=8$, $d_h=128$, BF16 cache elemen
   =
   131{,}072 \ \mathrm{bytes}
 \end{equation}
-of KV storage. A 40 GiB cache can therefore hold roughly $40\times 2^{30}/131{,}072 \approx 327{,}680$ active sequence tokens before fragmentation and block overhead. That budget could support about 80 conversations at 4096 active tokens, or 20 long-document requests at 16k active tokens, but not both at the same latency target. This arithmetic is crude, yet it is the kind of calculation that should precede claims about long-context deployment.
+of KV storage. A 40 GiB cache contains about $42{,}949{,}672{,}960$ bytes, so it can hold roughly $42{,}949{,}672{,}960/131{,}072 \approx 327{,}680$ active sequence tokens before fragmentation and block overhead. That budget could support about 80 conversations at 4096 active tokens, or 20 long-document requests at 16k active tokens, but not both at the same latency target. This arithmetic is crude, yet it is the kind of calculation that should precede claims about long-context deployment.
 
 \section{Implementation Notes}
+\index{observability}\index{deployment checklist}
 \label{sec:serving-implementation-notes}
 
 A minimal generation loop is easy to write and hard to serve. The loop tokenizes a prompt, runs prefill, samples a token, appends it, and repeats until an end condition. A service-grade loop separates request state from model execution. Request state includes token ids, sampling parameters, stop sequences, maximum token budget, KV-block table, stream handle, priority, deadline, and cancellation flag. Model execution operates on batches selected by the scheduler.
 
 Sampling code must be deterministic when determinism is promised. Temperature, top-$k$, top-$p$, repetition penalties, logit biases, and random seeds should be applied in a defined order. Stop sequences are text-level or token-level depending on the API; confusing the two can leak partial delimiters or stop too late. Structured-output modes need validators that can operate incrementally or repair invalid partial generations.
+
+Small inference demos also reveal common reproducibility gaps. If the runtime prompt template differs from the SFT template, the report should say so rather than attributing the result only to the model. If a LoRA adapter ships with an expanded tokenizer, the base embedding and LM-head shapes may need resizing before generation. If an NTK or RoPE scaling patch is applied at load time, the alpha value and maximum context assumption are part of the serving configuration. Streaming wrappers often receive cumulative token ids and then slice off the prompt; they must handle EOS, partial token-to-text boundaries, client cancellation, and cache cleanup. Character-count history truncation is not a substitute for token-budgeted context management because it can cut across templates, roles, or special tokens.
 
 The service-grade invariants are stable across implementations: separate prefill and decode metrics, budget KV cache explicitly, test variable-length batching, account for cancellation, and evaluate quality after every compression or decoding optimization.
 
@@ -197,11 +289,15 @@ The service-grade invariants are stable across implementations: separate prefill
 
 \begin{description}
 \item[Continuous batching] A scheduling policy that adds and removes requests from active decode batches as they arrive and finish.
+\item[Chunked prefill] Splitting long prompt processing into smaller chunks so prefill work can be interleaved with decode and other requests.
 \item[Decode] The autoregressive phase that generates one or more new tokens using the KV cache.
+\item[Disaggregated serving] A serving design that separates phases or components such as prefill and decode across different workers or hardware pools.
 \item[KV cache] Stored attention keys and values for previous tokens, used to avoid recomputing the full prefix at every decode step.
+\item[Medusa] A parallel decoding method that adds extra heads to propose multiple future tokens and verifies candidate continuations with the base model.
 \item[PagedAttention] A KV-cache management method that stores cache entries in fixed-size blocks to reduce fragmentation under variable-length requests.
 \item[Prefill] The phase that processes prompt tokens and initializes the KV cache before generation.
 \item[Speculative decoding] A method that proposes tokens with a cheaper draft computation and verifies them with the target model.
+\item[StreamingLLM] A windowed KV-cache method that preserves early attention-sink tokens together with recent tokens for streaming long inputs.
 \item[Time to first token] The latency from request arrival until the first output token is available to stream.
 \end{description}
 
@@ -215,4 +311,5 @@ The service-grade invariants are stable across implementations: separate prefill
 \item A 4-bit weight-only quantized model has lower memory use but worse p95 latency than BF16. List five possible causes and one measurement that would distinguish each cause.
 \item Explain speculative decoding with a draft model and a target model. Under what prompt distributions would you expect low acceptance rates?
 \item Compare two deployments of the same model: one optimized for maximum throughput and one optimized for interactive latency. Specify batch size policy, timeout policy, and the metric each deployment should optimize.
+\item Design a prefill-decode disaggregated serving plan for mixed traffic with long RAG prompts and short chat completions. State what state must move between workers and which metric would reveal that disaggregation made tail latency worse.
 \end{enumerate}
