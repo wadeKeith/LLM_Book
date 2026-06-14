@@ -43,7 +43,7 @@ class InventoryCategory:
 CATEGORIES = (
     InventoryCategory(
         "release instructions and repository controls",
-        (".gitignore", ".nojekyll", "CITATION.cff", "Makefile", "README.md"),
+        (".gitignore", ".nojekyll", "CITATION.cff", "Makefile", "README.md", "RIGHTS.md"),
     ),
     InventoryCategory(
         "publication website assets",

@@ -18,6 +18,7 @@ Cheng Yin
 - Source package: GitHub release source archive for this repository
 - Landing page: `index.html`
 - Citation metadata: `CITATION.cff`
+- Reuse statement: `RIGHTS.md`
 
 ## PDF Checksums
 
@@ -49,7 +50,7 @@ The full release-candidate target includes source, PDF, bibliography, layout, vi
 
 1. Merge the release PR into `main`. Done: `main` currently contains the release files.
 2. Enable GitHub Pages from the `main` branch root. Done: GitHub reports Pages source `main` `/` at `http://yincheng429.cn/LLM_Book/`.
-3. Choose and add a license or explicit reuse statement.
+3. Reuse statement. Done: `RIGHTS.md` records that no open license is granted unless a later release states otherwise.
 4. Make the repository public if the release should be publicly archived through GitHub Pages and Zenodo.
 5. Enable the repository in Zenodo's GitHub integration.
 6. Create or publish the GitHub release from tag `v2026.06.14` and attach both PDFs.

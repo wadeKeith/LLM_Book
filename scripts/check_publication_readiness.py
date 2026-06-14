@@ -32,7 +32,7 @@ REQUIRED_FILES = (
     "book/book.pdf",
     "book/book_zh.pdf",
 )
-LICENSE_FILES = ("LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING", "COPYING.md")
+LICENSE_FILES = ("LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING", "COPYING.md", "RIGHTS.md")
 
 
 @dataclass(frozen=True)
