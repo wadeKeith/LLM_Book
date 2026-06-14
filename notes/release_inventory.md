@@ -15,7 +15,7 @@ This inventory records the file classes intentionally present in the release wor
 | Springer template package | `SNmono.cls`, `book/SNmono.cls`, `book/*.bst`, `book/svind*.ist`, `history.txt`, `readme.txt`, `instructions.pdf` | Publisher-supplied class, bibliography/index styles, and template documentation |
 | English and Chinese manuscript sources | `book/*.tex`, `book/chapters/ch*.tex`, `book/references.bib` | Editable manuscript, front/back matter, chapters, and bibliography |
 | Rendered release PDFs | `book/book.pdf`, `book/book_zh.pdf` | Current English controlling draft and Chinese readable edition |
-| Publication audit notes | `notes/*.md` | Human-readable audit trail, acceptance criteria, provenance, style, visual QA, and release inventory |
+| Publication audit notes | `notes/*.md` | Human-readable audit trail, acceptance criteria, provenance, style, visual QA, release inventory, and publication handoff |
 | Release audit scripts | `scripts/*.py` | Repeatable source, PDF, metadata, provenance, documentation, build-locking, and cleanup gates |
 
 ## Explicit Exclusions

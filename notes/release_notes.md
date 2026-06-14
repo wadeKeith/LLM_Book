@@ -19,6 +19,7 @@ Cheng Yin
 - Landing page: `index.html`
 - Citation metadata: `CITATION.cff`
 - Reuse statement: `RIGHTS.md`
+- Publication handoff: `notes/publication_handoff.md`
 
 ## PDF Checksums
 
@@ -45,6 +46,8 @@ The release candidate passed:
 - Git whitespace check
 
 The full release-candidate target includes source, PDF, bibliography, layout, visual, bilingual-alignment, proofing, provenance, and release-inventory gates.
+
+The remaining account-side publication steps are recorded in `notes/publication_handoff.md`.
 
 ## Publication Path
 

@@ -29,6 +29,7 @@ REQUIRED_FILES = (
     ".nojekyll",
     "CITATION.cff",
     "notes/release_notes.md",
+    "notes/publication_handoff.md",
     "book/book.pdf",
     "book/book_zh.pdf",
 )
@@ -161,6 +162,7 @@ def release_notes_result() -> CheckResult:
         "4e0204492b461f06b9c0c6bf72e0b125ac836a9acfc522fbf730399f1b71c92a",
         "68909d699cb9ab1a31f1c5eed796294e7d0da474e26f2f563bd0752b7d0b4fff",
         "GitHub Release Body Draft",
+        "notes/publication_handoff.md",
     ]
     missing = [snippet for snippet in required if snippet not in text]
     return result(
