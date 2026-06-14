@@ -52,7 +52,7 @@ The full release-candidate target includes source, PDF, bibliography, layout, vi
 2. Enable GitHub Pages from the `main` branch root. Done: GitHub reports Pages source `main` `/` at `http://yincheng429.cn/LLM_Book/`.
 3. Reuse statement. Done: `RIGHTS.md` records that no open license is granted unless a later release states otherwise.
 4. Repository visibility. Done: GitHub reports `wadeKeith/LLM_Book` as public, and the repository homepage points to `http://yincheng429.cn/LLM_Book/`.
-5. Enable the repository in Zenodo's GitHub integration.
+5. Zenodo GitHub integration. Pending: GitHub currently reports `0` repository webhooks, so no Zenodo hook is visible yet. Enable the repository in Zenodo before publishing the GitHub release.
 6. GitHub release. Prepared: draft release `v2026.06.14` exists on `main` with both PDF assets attached. Publish it only after Zenodo's GitHub integration is enabled, so Zenodo can archive the release and mint the DOI.
 7. After Zenodo mints the DOI, update `CITATION.cff`, `index.html`, and this note with the DOI.
 8. Create or update the OSF project, upload or link the release artifacts, add the Zenodo DOI, and make the OSF project public when ready.

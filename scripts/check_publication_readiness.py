@@ -199,6 +199,41 @@ def pages_result() -> CheckResult:
     return result("GitHub Pages site", ok, detail, pending=not ok)
 
 
+def zenodo_integration_result() -> CheckResult:
+    code, stdout, stderr = run(["gh", "api", f"repos/{REPO}/hooks"])
+    if code != 0:
+        return result(
+            "Zenodo GitHub integration",
+            False,
+            stderr or "cannot inspect repository hooks; verify Zenodo integration in the Zenodo dashboard",
+            pending=True,
+        )
+
+    hooks = json.loads(stdout)
+    zenodo_hooks = []
+    for hook in hooks:
+        config = hook.get("config") or {}
+        haystack = " ".join(
+            str(part)
+            for part in (
+                hook.get("name", ""),
+                config.get("url", ""),
+                config.get("content_type", ""),
+            )
+        ).lower()
+        if "zenodo" in haystack:
+            zenodo_hooks.append(str(hook.get("id", "unknown")))
+
+    if zenodo_hooks:
+        return result("Zenodo GitHub integration", True, "visible hook ids: " + ", ".join(zenodo_hooks))
+    return result(
+        "Zenodo GitHub integration",
+        False,
+        f"no Zenodo hook visible through GitHub hooks API; hooks visible={len(hooks)}",
+        pending=True,
+    )
+
+
 def github_release_result() -> CheckResult:
     code, stdout, stderr = run(
         [
@@ -269,6 +304,7 @@ def collect_results() -> list[CheckResult]:
             release_notes_result(),
             repo_visibility_result(),
             pages_result(),
+            zenodo_integration_result(),
             github_release_result(),
             zenodo_result(),
             osf_result(),
