@@ -15,7 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 REPO = "wadeKeith/LLM_Book"
 EXPECTED_TAG = "v2026.06.14"
-EXPECTED_PAGES_URL = "https://wadekeith.github.io/LLM_Book/"
+EXPECTED_PAGES_URL = "http://yincheng429.cn/LLM_Book/"
 REQUIRED_FILES = (
     "index.html",
     ".nojekyll",
@@ -139,7 +139,11 @@ def pages_result() -> CheckResult:
     html_url = payload.get("html_url", "")
     status = payload.get("status", "")
     source = payload.get("source") or {}
-    ok = html_url.rstrip("/") == EXPECTED_PAGES_URL.rstrip("/") and source.get("branch") == "main"
+    ok = (
+        html_url.rstrip("/") == EXPECTED_PAGES_URL.rstrip("/")
+        and source.get("branch") == "main"
+        and status == "built"
+    )
     detail = f"url={html_url or 'unknown'}, status={status or 'unknown'}, source={source}"
     return result("GitHub Pages site", ok, detail, pending=not ok)
 

@@ -7,7 +7,7 @@ authors:
     given-names: Cheng
 version: "2026.06.14"
 date-released: "2026-06-14"
-url: "https://wadekeith.github.io/LLM_Book/"
+url: "http://yincheng429.cn/LLM_Book/"
 repository-code: "https://github.com/wadeKeith/LLM_Book"
 abstract: "A bilingual book on large language models and generative foundation models, covering foundations, training systems, alignment, retrieval, reasoning, multimodal systems, evaluation, governance, and research practice."
 keywords:
