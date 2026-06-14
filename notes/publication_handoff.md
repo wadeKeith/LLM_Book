@@ -63,15 +63,17 @@ A bilingual book on large language models and generative foundation models, cove
 2. In Zenodo's GitHub repository list, sync repositories and enable `wadeKeith/LLM_Book`.
 3. Re-run `make publication-readiness`.
 4. Confirm `Zenodo GitHub integration` is `READY` or verify the repository is enabled in the Zenodo dashboard.
-5. Publish the existing GitHub draft release `v2026.06.14`.
-6. Wait for Zenodo to ingest the release and create the record.
-7. Complete any required Zenodo metadata fields and publish the Zenodo record.
-8. Copy the version DOI issued by Zenodo.
-9. Update `CITATION.cff`, `index.html`, `notes/release_notes.md`, and this file with the DOI.
-10. Create or update the OSF project.
-11. Add the GitHub Pages URL, GitHub release URL, Zenodo DOI, and both PDF artifacts or archival links to OSF.
-12. Make the OSF project public.
-13. Re-run `make publication-readiness` and confirm no pending items remain.
+5. Dry-run the guarded release publisher: `python3 scripts/publish_release_after_zenodo.py`.
+6. Publish the existing GitHub draft release `v2026.06.14`: `make publish-release-after-zenodo`.
+   If Zenodo is enabled in the dashboard but no hook is visible through the GitHub hooks API, run `python3 scripts/publish_release_after_zenodo.py --zenodo-dashboard-verified --publish` instead.
+7. Wait for Zenodo to ingest the release and create the record.
+8. Complete any required Zenodo metadata fields and publish the Zenodo record.
+9. Copy the version DOI issued by Zenodo.
+10. Update `CITATION.cff`, `index.html`, `notes/release_notes.md`, and this file with the DOI.
+11. Create or update the OSF project.
+12. Add the GitHub Pages URL, GitHub release URL, Zenodo DOI, and both PDF artifacts or archival links to OSF.
+13. Make the OSF project public.
+14. Re-run `make publication-readiness` and confirm no pending items remain.
 
 ## DOI Backfill Targets
 
