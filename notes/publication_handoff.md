@@ -16,7 +16,7 @@ This note records the remaining account-side actions for publishing the current 
 - Release status: published
 - Zenodo GitHub integration: active; GitHub hook id `641530522`
 - Zenodo DOI: `https://doi.org/10.5281/zenodo.20691216`
-- OSF mirror: pending
+- OSF mirror: `https://osf.io/m85qj/`
 
 ## Release Metadata
 
@@ -75,9 +75,9 @@ A bilingual book on large language models and generative foundation models, cove
 
 ## OSF Backfill Targets
 
-- `index.html`: add the OSF project URL once public
-- `notes/release_notes.md`: add the OSF project URL
-- `notes/publication_handoff.md`: replace the pending OSF status with the public project URL
+- `index.html`: OSF project URL recorded as `https://osf.io/m85qj/`
+- `notes/release_notes.md`: OSF project URL recorded as `https://osf.io/m85qj/`
+- `notes/publication_handoff.md`: OSF project URL recorded as `https://osf.io/m85qj/`
 
 ## Final Verification Command
 

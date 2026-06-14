@@ -43,6 +43,7 @@ def replace_or_append_doi_cff(text: str, doi: str) -> str:
 
 def replace_index(text: str, doi: str, osf_url: str | None) -> str:
     doi_url = f"https://doi.org/{doi}"
+    normalized_osf = f"{osf_url.rstrip('/')}/" if osf_url else None
     text = re.sub(
         r"(?s)  url = \{http://yincheng429\.cn/LLM_Book/\}\n(?:  doi = \{[^}]+\}\n)?\}",
         f"  url = {{http://yincheng429.cn/LLM_Book/}}\n  doi = {{{doi}}}\n}}",
@@ -53,7 +54,7 @@ def replace_index(text: str, doi: str, osf_url: str | None) -> str:
         note = (
             "The archived release is available through "
             f'<a href="{doi_url}">Zenodo DOI {doi}</a> and the '
-            f'<a href="{osf_url.rstrip("/")}/">OSF mirror</a>.'
+            f'<a href="{normalized_osf}">OSF mirror</a>.'
         )
     else:
         note = (
@@ -74,12 +75,24 @@ def replace_index(text: str, doi: str, osf_url: str | None) -> str:
 
     if "Zenodo DOI" not in text:
         raise ValueError("index.html DOI note was not updated")
+    if normalized_osf:
+        osf_button = f'          <a class="button secondary" href="{normalized_osf}">OSF mirror</a>\n'
+        if osf_button not in text:
+            text = re.sub(
+                r'(          <a class="button secondary" href="https://doi\.org/[^"]+">Zenodo DOI</a>\n)',
+                r"\1" + osf_button,
+                text,
+                count=1,
+            )
+        if normalized_osf not in text:
+            raise ValueError("index.html OSF link was not updated")
     return text
 
 
 def replace_release_notes(text: str, doi: str, osf_url: str | None) -> str:
+    normalized_osf = f"{osf_url.rstrip('/')}/" if osf_url else None
     doi_line = f"- Zenodo DOI: `https://doi.org/{doi}`"
-    osf_line = f"- OSF mirror: `{osf_url.rstrip('/')}/`" if osf_url else "- OSF mirror: pending"
+    osf_line = f"- OSF mirror: `{normalized_osf}`" if normalized_osf else "- OSF mirror: pending"
     archive_block = f"## Archive Links\n\n{doi_line}\n{osf_line}\n\n"
 
     if "## Archive Links" in text:
@@ -98,7 +111,12 @@ def replace_release_notes(text: str, doi: str, osf_url: str | None) -> str:
     if osf_url:
         text = text.replace(
             "Create or update the OSF project, upload or link the release artifacts, add the Zenodo DOI, and make the OSF project public when ready.",
-            f"OSF mirror. Done: `{osf_url.rstrip('/')}/` records the release artifacts and DOI.",
+            f"OSF mirror. Done: `{normalized_osf}` records the release artifacts and DOI.",
+        )
+        text = re.sub(
+            r"(?m)^OSF mirror: (?:pending|https://osf\.io/[A-Za-z0-9_-]+/?)$",
+            f"OSF mirror: {normalized_osf}",
+            text,
         )
     return text
 

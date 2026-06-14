@@ -52,7 +52,7 @@ The remaining account-side publication steps are recorded in `notes/publication_
 ## Archive Links
 
 - Zenodo DOI: `https://doi.org/10.5281/zenodo.20691216`
-- OSF mirror: pending
+- OSF mirror: `https://osf.io/m85qj/`
 
 ## Publication Path
 
@@ -63,7 +63,7 @@ The remaining account-side publication steps are recorded in `notes/publication_
 5. Zenodo GitHub integration. Done: GitHub reports active Zenodo hook id `641530522` for release events.
 6. GitHub release. Done: `v2026.06.14` is published at `https://github.com/wadeKeith/LLM_Book/releases/tag/v2026.06.14` with both PDF assets attached.
 7. Zenodo DOI. Done: `https://doi.org/10.5281/zenodo.20691216` is recorded in `CITATION.cff`, `index.html`, and this note.
-8. Create or update the OSF project, upload or link the release artifacts, add the Zenodo DOI, and make the OSF project public when ready.
+8. OSF mirror. Done: `https://osf.io/m85qj/` records the release artifacts and DOI.
 
 ## GitHub Release Body Draft
 
@@ -91,5 +91,5 @@ GitHub Pages:
 
 Zenodo DOI: https://doi.org/10.5281/zenodo.20691216
 
-OSF mirror: pending
+OSF mirror: https://osf.io/m85qj/
 ```
